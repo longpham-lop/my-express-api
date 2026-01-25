@@ -1,9 +1,16 @@
-import type { Request, Response } from "express";
+import { Request, Response } from "express";
+import { TableModel } from "../models/Table";
 
-export const getTables = (req: Request, res: Response) => {
-  res.json({ tables: [] });
-};
+export class TableController {
+  static async getAll(req: Request, res: Response) {
+    res.json(await TableModel.findAll());
+  }
 
-export const createTable = (req: Request, res: Response) => {
-  res.json({ message: "Create table" });
-};
+  static async updateStatus(req: Request, res: Response) {
+    const table = await TableModel.updateStatus(
+      Number(req.params.id),
+      req.body.status
+    );
+    res.json(table);
+  }
+}

@@ -1,69 +1,33 @@
-import type { Request, Response } from "express";
+import { Request, Response } from "express";
+import { MenuItem } from "../models/MenuItem";
 
-// Lấy danh sách món
-export const getMenu = (req: Request, res: Response) => {
-  res.json({
-    menu: [
-      {
-        id: 1,
-        name: "Cơm gà",
-        price: 45000,
-        category: "Món chính",
-        status: "available",
-      },
-      {
-        id: 2,
-        name: "Trà đào",
-        price: 25000,
-        category: "Đồ uống",
-        status: "available",
-      },
-    ],
-  });
-};
+export class MenuController {
 
-// Lấy chi tiết món
-export const getMenuItemById = (req: Request, res: Response) => {
-  const { id } = req.params;
+  static async create(req: Request, res: Response) {
+    const item = await MenuItem.create(req.body);
+    res.status(201).json(item);
+  }
 
-  res.json({
-    id,
-    name: "Cơm gà",
-    price: 45000,
-    category: "Món chính",
-    description: "Cơm gà xối mỡ",
-  });
-};
+  static async getAll(req: Request, res: Response) {
+    res.json(await MenuItem.findAll());
+  }
 
-// Thêm món
-export const createMenuItem = (req: Request, res: Response) => {
-    console.log(req.body);
-  const { name, price, category, description } = req.body;
+  static async getById(req: Request, res: Response) {
+    const item = await MenuItem.findById(Number(req.params.id));
+    if (!item) return res.status(404).json({ message: "Not found" });
+    res.json(item);
+  }
 
-  res.json({
-    message: "Menu item created",
-    data: { name, price, category, description },
-  });
-};
+  static async update(req: Request, res: Response) {
+    const item = await MenuItem.update(
+      Number(req.params.id),
+      req.body
+    );
+    res.json(item);
+  }
 
-// Cập nhật món
-export const updateMenuItem = (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { name, price, category, description } = req.body;
-
-  res.json({
-    message: "Menu item updated",
-    id,
-    data: { name, price, category, description },
-  });
-};
-
-// Xóa món
-export const deleteMenuItem = (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  res.json({
-    message: "Menu item deleted",
-    id,
-  });
-};
+  static async delete(req: Request, res: Response) {
+    await MenuItem.delete(Number(req.params.id));
+    res.json({ message: "Deleted" });
+  }
+}

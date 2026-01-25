@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { getTables, createTable } from "../controllers/TableController";
+import { TableController } from "../controllers/TableController";
 
 const router = Router();
 
-router.get("/", getTables);
-router.post("/", createTable);
+router.get("/", TableController.getAll);
+router.put("/:id/status", TableController.updateStatus);
 
 export default router;

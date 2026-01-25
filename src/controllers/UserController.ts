@@ -1,37 +1,25 @@
 import { Request, Response } from "express";
-import { getAllUsers, getUserByEmail } from "../models/User";
+import { User } from "../models/User";
 
-/**
- * GET /api/users
- */
-export const getUsers = async (req: Request, res: Response) => {
-  try {
-    const users = await getAllUsers();
-    res.status(200).json(users);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Lỗi server" });
+export class UserController {
+
+  static async create(req: Request, res: Response) {
+    const user = await User.create(req.body);
+    res.status(201).json(user);
   }
-};
 
-/**
- * GET /api/users/email/:email
- */
-export const getUserByEmailController = async (req: Request, res: Response) => {
-  const { email } = req.params;
-    if (typeof email !== "string") {
-        return res.status(400).json({ message: "Email không hợp lệ" });
-    }
-  try {
-    const user = await getUserByEmail(email);
-
-    if (!user) {
-      return res.status(404).json({ message: "Không tìm thấy user" });
-    }
-
-    res.status(200).json(user);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Lỗi server" });
+  static async getAll(req: Request, res: Response) {
+    res.json(await User.findAll());
   }
-};
+
+  static async getById(req: Request, res: Response) {
+    const user = await User.findById(Number(req.params.id));
+    if (!user) return res.status(404).json({ message: "Not found" });
+    res.json(user);
+  }
+
+  static async delete(req: Request, res: Response) {
+    await User.delete(Number(req.params.id));
+    res.json({ message: "Deleted" });
+  }
+}

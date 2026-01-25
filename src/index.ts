@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import "./config/db";
 
 import authRouter from './routers/auth.routers';
 import tableRouter from './routers/table.routers';
@@ -8,6 +9,7 @@ import orderRouter from './routers/order.routers';
 import reservationRouter from './routers/reservation.routers';
 import userRouter from './routers/user.routers';
 import paymentRouter from './routers/payment.routers';
+
 
 const app = express();
 
@@ -19,7 +21,7 @@ app.use(express.json());
 // đọc form
 app.use(express.urlencoded({ extended: true }));
 app.get('/', (req, res) => {
-  res.send('Backend nhà hàng đang chạy OK 🚀');
+  res.send('Backend running');
 });
 // public files
 app.use(express.static(path.join(__dirname, '../public')));
@@ -36,7 +38,8 @@ app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/reservations', reservationRouter);
 app.use('/api/users', userRouter);
-app.use('api/payments', paymentRouter);
+app.use('/api/payments', paymentRouter);
+
 
 app.listen(3000, () => {
   console.log('Server chạy http://localhost:3000');

@@ -1,16 +1,33 @@
-import { pool } from "../config/db";
+// models/Table.ts
+import { DataTypes, Model } from "sequelize";
+import sequelize from "../config/db";
 
-export class TableModel {
-  static async findAll() {
-    const rs = await pool.query("SELECT * FROM tables");
-    return rs.rows;
-  }
+class Table extends Model {
+  public id!: number;
+  public status!: string;
 
-  static async updateStatus(id: number, status: string) {
-    const rs = await pool.query(
-      "UPDATE tables SET status=$1 WHERE id=$2 RETURNING *",
-      [status, id]
-    );
-    return rs.rows[0];
-  }
+  public readonly createdAt!: Date;
+  public readonly updatedAt!: Date;
 }
+
+Table.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "available",
+    },
+  },
+  {
+    sequelize,
+    tableName: "tables",
+    timestamps: true,
+  }
+);
+
+export default Table;

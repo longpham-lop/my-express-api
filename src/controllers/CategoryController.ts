@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { Category } from "../models/Category";
+import Category from "../models/Category";
 
 export class CategoryController {
   static async create(req: Request, res: Response) {

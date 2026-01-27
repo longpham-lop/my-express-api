@@ -1,39 +1,21 @@
-import type { Request, Response } from "express";
+import Order from "../models/Order";
+import { Request, Response } from "express";
 
-// Tạo đơn gọi món
-export const createOrder = (req: Request, res: Response) => {
-  const { tableId, items } = req.body;
-
-  res.json({
-    message: "Order created",
-    data: { tableId, items },
-  });
+export const getAllOrders = async (req: Request, res: Response) => {
+  try {
+    const orders = await Order.findAll();
+    res.json(orders);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 };
 
-// Lấy danh sách đơn
-export const getOrders = (req: Request, res: Response) => {
-  res.json({
-    orders: [],
-  });
+export const createOrder = async (req: Request, res: Response) => {
+  try {
+    const order = await Order.create(req.body);
+    res.status(201).json(order);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 };
 
-// Lấy chi tiết đơn
-export const getOrderById = (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  res.json({
-    orderId: id,
-  });
-};
-
-// Cập nhật trạng thái đơn
-export const updateOrderStatus = (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { status } = req.body;
-
-  res.json({
-    message: "Order status updated",
-    orderId: id,
-    status,
-  });
-};

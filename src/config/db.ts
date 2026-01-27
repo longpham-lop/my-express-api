@@ -1,30 +1,22 @@
-import { Pool } from "pg";
+// config/db.ts
+import { Sequelize } from "sequelize"; 
 import dotenv from "dotenv";
 
-dotenv.config();
+dotenv.config(); 
 
-/**
- * Validate env trước khi kết nối DB
- * -> fail sớm, dễ debug
- */
-if (!process.env.DB_HOST ||
-    !process.env.DB_USER ||
-    !process.env.DB_PASSWORD ||
-    !process.env.DB_NAME) {
-  throw new Error("❌ Missing database environment variables");
-}
 
-export const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT) || 5432,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD, 
-  database: process.env.DB_NAME,
-});
+const port = process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 5432;
 
-/**
- * Test kết nối DB
- */
-pool.query("SELECT 1")
-  .then(() => console.log("✅ Connected to PostgreSQL"))
-  .catch(err => console.error("❌ DB error:", err));
+const sequelize = new Sequelize(
+  process.env.DB_NAME || "ordernow",
+  process.env.DB_USER || "postgres",
+  process.env.DB_PASSWORD || "123456",
+  {
+    host: process.env.DB_HOST || "localhost",
+    dialect: "postgres",
+    port: port,
+    logging: false,
+  }
+);
+
+export default sequelize;

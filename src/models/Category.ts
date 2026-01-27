@@ -1,16 +1,26 @@
-import { pool } from "../config/db";
+import sequelize from "../config/db"; // default export
+import { QueryTypes } from "sequelize";
 
-export class Category {
+export class CategoryModel {
+  // Tạo category mới
   static async create(name: string) {
-    const rs = await pool.query(
-      "INSERT INTO categories(name) VALUES($1) RETURNING *",
-      [name]
+    const [result] = await sequelize.query(
+      "INSERT INTO categories(name) VALUES(:name) RETURNING *",
+      {
+        replacements: { name },
+        type: QueryTypes.INSERT, // dùng INSERT
+      }
     );
-    return rs.rows[0];
+    return result;
   }
 
+  // Lấy tất cả category
   static async findAll() {
-    const rs = await pool.query("SELECT * FROM categories");
-    return rs.rows;
+    const results = await sequelize.query("SELECT * FROM categories", {
+      type: QueryTypes.SELECT,
+    });
+    return results;
   }
 }
+
+export default CategoryModel;

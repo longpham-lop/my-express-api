@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-import "./config/db";
+import sequelize from './config/db';
 
 import authRouter from './routers/auth.routers';
 import tableRouter from './routers/table.routers';
@@ -9,7 +9,7 @@ import orderRouter from './routers/order.routers';
 import reservationRouter from './routers/reservation.routers';
 import userRouter from './routers/user.routers';
 import paymentRouter from './routers/payment.routers';
-
+import orderItemRouter from './routers/orderItem.routers';
 
 const app = express();
 
@@ -21,7 +21,7 @@ app.use(express.json());
 // đọc form
 app.use(express.urlencoded({ extended: true }));
 app.get('/', (req, res) => {
-  res.send('Backend running');
+  res.send('Backend akelo');
 });
 // public files
 app.use(express.static(path.join(__dirname, '../public')));
@@ -39,8 +39,22 @@ app.use('/api/orders', orderRouter);
 app.use('/api/reservations', reservationRouter);
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
-
+app.use('/api/order-items', orderItemRouter);
 
 app.listen(3000, () => {
   console.log('Server chạy http://localhost:3000');
 });
+const testSync = async () => {
+  try {
+    await sequelize.authenticate(); 
+    console.log("Database connected successfully✅!");
+
+    // Sync tất cả model với database
+    await sequelize.sync({ alter: true }); 
+    console.log("All models were synchronized successfully!");
+  } catch (err) {
+    console.error("Unable to connect or sync:", err);
+  }
+};
+
+testSync();

@@ -1,19 +1,25 @@
-import { pool } from "../config/db";
+import { DataTypes } from "sequelize";
+import sequelize from "../config/db";
+import User from "./User";
+import Table from "./Table"; 
 
-export class Reservation {
-  static async create(data: any) {
-    const rs = await pool.query(
-      `INSERT INTO reservations(user_id, table_id, reserve_date, reserve_time, status)
-       VALUES($1,$2,$3,$4,'pending') RETURNING *`,
-      [data.user_id, data.table_id, data.reserve_date, data.reserve_time]
-    );
-    return rs.rows[0];
+const Reservation = sequelize.define(
+  "Reservation",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    user_id: { type: DataTypes.INTEGER, allowNull: false },
+    table_id: { type: DataTypes.INTEGER, allowNull: false },
+    reservation_time: { type: DataTypes.DATE, allowNull: false },
+    status: { type: DataTypes.STRING, defaultValue: "pending" },
+  },
+  {
+    tableName: "reservations",
+    timestamps: true,
   }
+);
 
-  static async cancel(id: number) {
-    await pool.query(
-      "UPDATE reservations SET status='cancelled' WHERE id=$1",
-      [id]
-    );
-  }
-}
+// Quan hệ
+Reservation.belongsTo(User, { foreignKey: "user_id" });
+Reservation.belongsTo(Table, { foreignKey: "table_id" });
+
+export default Reservation;

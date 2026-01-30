@@ -1,9 +1,26 @@
 import { Router } from "express";
-import { getAllReservations, createReservation } from "../controllers/ReservationController";
+import {
+  getAllReservations,
+  createReservation,
+//   cancelReservation,
+  getAllReservationsAdmin
+} from "../controllers/ReservationController";
+
+import { authMiddleware } from "../middlewares/auth.middleware";
+import { isAdmin } from "../middlewares/role.middleware";
 
 const router = Router();
 
-router.post("/", createReservation);
-router.put("/:id/cancel", getAllReservations);
+/**
+ * USER
+ */
+router.post("/", authMiddleware, createReservation);              // tạo reservation
+router.get("/", authMiddleware, getAllReservations);              // xem reservation của mình
+// router.put("/:id/cancel", authMiddleware, cancelReservation);     // hủy reservation
+
+/**
+ * ADMIN
+ */
+router.get("/admin/all", authMiddleware, isAdmin, getAllReservationsAdmin);
 
 export default router;

@@ -1,15 +1,22 @@
 import express from 'express';
+import dotenv from "dotenv";
+dotenv.config();
+
+
 import path from 'path';
 import sequelize from './config/db';
+
 
 import authRouter from './routers/auth.routers';
 import tableRouter from './routers/table.routers';
 import menuRouter from './routers/menu.routers';
+import categoryRouter from './routers/category.routers';
 import orderRouter from './routers/order.routers';
 import reservationRouter from './routers/reservation.routers';
 import userRouter from './routers/user.routers';
 import paymentRouter from './routers/payment.routers';
 import orderItemRouter from './routers/orderItem.routers';
+import Role from './models/Role';
 
 const app = express();
 
@@ -36,6 +43,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/tables', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
+app.use('/api/category', categoryRouter);
 app.use('/api/reservations', reservationRouter);
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
@@ -57,4 +65,18 @@ const testSync = async () => {
   }
 };
 
+const initRoles = async () => {
+  const roles = ["admin", "user"];
+
+  for (const name of roles) {
+    await Role.findOrCreate({
+      where: { name },
+    });
+  }
+};
+(async () => {
+  await sequelize.sync();
+  await initRoles();
+})();
+console.log("JWT_SECRET =", process.env.JWT_SECRET);
 testSync();

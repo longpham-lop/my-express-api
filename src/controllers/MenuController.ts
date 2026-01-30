@@ -1,67 +1,111 @@
 import { Request, Response } from "express";
-import MenuItem from "../models/MenuItem"; // chú ý import default export nếu bạn export default
+import MenuItem from "../models/MenuItem";
+import Category from "../models/Category";
 
 export class MenuController {
-
-  // Tạo mới
+  // CREATE
   static async create(req: Request, res: Response) {
     try {
-      const item = await MenuItem.create(req.body);
-      res.status(201).json(item);
+      const { name, price, categoryId, description, image } = req.body;
+
+      if (!name || !price || !categoryId) {
+        return res.status(400).json({
+          message: "name, price, categoryId are required",
+        });
+      }
+
+      // check category tồn tại
+      const category = await Category.findByPk(categoryId);
+      if (!category) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+
+      const item = await MenuItem.create({
+        name,
+        price,
+        categoryId,
+        description,
+        image,
+      });
+
+      return res.status(201).json({
+        message: "Menu item created successfully",
+        data: item,
+      });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ message: err.message });
     }
   }
 
-  // Lấy tất cả
+  // GET ALL
   static async getAll(req: Request, res: Response) {
     try {
-      const items = await MenuItem.findAll();
-      res.json(items);
+      const items = await MenuItem.findAll({
+        include: [{ model: Category, attributes: ["id", "name"] }],
+        order: [["id", "DESC"]],
+      });
+
+      return res.json(items);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ message: err.message });
     }
   }
 
-  // Lấy theo ID
+  // GET BY ID
   static async getById(req: Request, res: Response) {
     try {
       const id = Number(req.params.id);
-      const item = await MenuItem.findByPk(id);
-      if (!item) return res.status(404).json({ message: "Not found" });
-      res.json(item);
+
+      const item = await MenuItem.findByPk(id, {
+        include: Category,
+      });
+
+      if (!item) {
+        return res.status(404).json({ message: "Menu item not found" });
+      }
+
+      return res.json(item);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ message: err.message });
     }
   }
 
-  // Cập nhật
+  // UPDATE
   static async update(req: Request, res: Response) {
     try {
       const id = Number(req.params.id);
-      const item = await MenuItem.findByPk(id);
-      if (!item) return res.status(404).json({ message: "Not found" });
 
-      // Cập nhật các trường trong body
+      const item = await MenuItem.findByPk(id);
+      if (!item) {
+        return res.status(404).json({ message: "Menu item not found" });
+      }
+
       await item.update(req.body);
 
-      res.json(item);
+      return res.json({
+        message: "Menu item updated successfully",
+        data: item,
+      });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ message: err.message });
     }
   }
 
-  // Xóa
+  // DELETE
   static async delete(req: Request, res: Response) {
     try {
       const id = Number(req.params.id);
-      const item = await MenuItem.findByPk(id);
-      if (!item) return res.status(404).json({ message: "Not found" });
 
-      await item.destroy(); // xóa bản ghi
-      res.json({ message: "Deleted" });
+      const item = await MenuItem.findByPk(id);
+      if (!item) {
+        return res.status(404).json({ message: "Menu item not found" });
+      }
+
+      await item.destroy();
+
+      return res.json({ message: "Menu item deleted successfully" });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ message: err.message });
     }
   }
 }

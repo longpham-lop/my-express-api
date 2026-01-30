@@ -1,26 +1,30 @@
-import sequelize from "../config/db"; // default export
-import { QueryTypes } from "sequelize";
+// src/models/Category.ts
+import { DataTypes, Model } from "sequelize";
+import sequelize from "../config/db";
 
-export class CategoryModel {
-  // Tạo category mới
-  static async create(name: string) {
-    const [result] = await sequelize.query(
-      "INSERT INTO categories(name) VALUES(:name) RETURNING *",
-      {
-        replacements: { name },
-        type: QueryTypes.INSERT, // dùng INSERT
-      }
-    );
-    return result;
-  }
-
-  // Lấy tất cả category
-  static async findAll() {
-    const results = await sequelize.query("SELECT * FROM categories", {
-      type: QueryTypes.SELECT,
-    });
-    return results;
-  }
+class Category extends Model {
+  declare id: number;
+  declare name: string;
 }
 
-export default CategoryModel;
+Category.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
+    },
+  },
+  {
+    sequelize,
+    tableName: "categories",
+    timestamps: true,
+  }
+);
+
+export default Category;

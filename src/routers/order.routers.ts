@@ -1,12 +1,22 @@
 import { Router } from "express";
-import {getAllOrders, createOrder} from "../controllers/OrderController";
+import {
+  getAllOrders,
+  getOrderById,
+  createOrder,
+  updateOrderStatus,
+  deleteOrder,
+} from "../controllers/OrderController";
+import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = Router();
 
-// /api/orders
-router.post("/", createOrder);
-router.get("/", getAllOrders);
-router.get("/:id", getAllOrders);
-router.put("/:id/status", getAllOrders);
+// USER + ADMIN
+router.get("/", authMiddleware, getAllOrders);
+router.get("/:id", authMiddleware, getOrderById);
+router.post("/", authMiddleware, createOrder);
+
+// ADMIN ONLY
+router.put("/:id/status", authMiddleware, updateOrderStatus);
+router.delete("/:id", authMiddleware, deleteOrder);
 
 export default router;

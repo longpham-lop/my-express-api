@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import Order from "../models/Order";
+import User from "../models/User";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -92,7 +93,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       total_price,
       status: "pending",
     });
-
+  
     res.status(201).json(order);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -152,4 +153,11 @@ export const deleteOrder = async (req: AuthRequest, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+};
+// GET /orders/my
+export const getMyOrders = async (req: AuthRequest, res: Response) => {
+  const orders = await Order.findAll({
+    where: { user_id: req.user?.id },
+  });
+  res.json(orders);
 };

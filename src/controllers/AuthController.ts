@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User";
+import Role from "../models/Role";
 import { Request, Response } from "express";
 
 export const login = async (req: Request, res: Response) => {
@@ -28,6 +29,29 @@ export const login = async (req: Request, res: Response) => {
     );
 
     res.json({ token });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const register = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password } = req.body;
+
+    const role = await Role.findOne({ where: { name: "user" } });
+
+    if (!role) {
+      return res.status(500).json({ message: "Role not found" });
+    }
+
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role_id: role.id,
+    });
+
+    res.status(201).json(user);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

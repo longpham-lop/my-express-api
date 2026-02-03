@@ -1,7 +1,12 @@
 import { Response, NextFunction } from "express";
+import { AuthRequest } from "./auth.middleware";
 
-export const isAdmin = (req: any, res: Response, next: NextFunction) => {
-  if (!req.user || req.user.Role.name !== "admin") {
+export const isAdmin = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (req.user?.role_id !== 1) {
     return res.status(403).json({ message: "Admin only" });
   }
   next();

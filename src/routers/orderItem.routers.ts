@@ -1,6 +1,6 @@
 import { Router } from "express";
 import {
-  getAllOrderItems,
+  getMyOrderItems,
   createOrderItem,
   deleteOrderItem
 } from "../controllers/OrderItemController";
@@ -8,7 +8,7 @@ import {
 const router = Router();
 
 // Lấy tất cả order items
-router.get("/", getAllOrderItems);
+router.get("/", getMyOrderItems);
 
 // Tạo order item
 router.post("/", createOrderItem);

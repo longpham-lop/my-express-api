@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import MenuItem from "../models/MenuItem";
+import MenuItem from "../models/Menu";
 import Category from "../models/Category";
 
 export class MenuController {
@@ -41,7 +41,13 @@ export class MenuController {
   static async getAll(req: Request, res: Response) {
     try {
       const items = await MenuItem.findAll({
-        include: [{ model: Category, attributes: ["id", "name"] }],
+        include: [
+      {
+        model: Category,
+        as: "category",
+        attributes: ["id", "name"],
+      },
+    ],
         order: [["id", "DESC"]],
       });
 

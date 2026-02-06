@@ -14,7 +14,7 @@ export interface MenuItemAttributes {
   image: string;
 }
 
-class MenuItem
+class Menu
   extends Model<MenuItemAttributes>
   implements MenuItemAttributes
 {
@@ -30,7 +30,7 @@ class MenuItem
 }
 
 // Khởi tạo model
-MenuItem.init(
+Menu.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -66,14 +66,14 @@ MenuItem.init(
 );
 
 // Quan hệ
-MenuItem.belongsTo(Category, {
+Menu.belongsTo(Category, {
   foreignKey: "categoryId",
   as: "category",
 });
 
-Category.hasMany(MenuItem, {
+Category.hasMany(Menu, {
   foreignKey: "categoryId",
   as: "menuItems",
 });
 
-export default MenuItem;
+export default Menu;

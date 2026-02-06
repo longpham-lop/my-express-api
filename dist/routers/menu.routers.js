@@ -2,11 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const MenuController_1 = require("../controllers/MenuController");
+const auth_middleware_1 = require("../middlewares/auth.middleware");
+const role_middleware_1 = require("../middlewares/role.middleware");
 const router = (0, express_1.Router)();
-// /api/menu
-router.get("/", MenuController_1.getMenu);
-router.get("/:id", MenuController_1.getMenuItemById);
-router.post("/", MenuController_1.createMenuItem);
-router.put("/:id", MenuController_1.updateMenuItem);
-router.delete("/:id", MenuController_1.deleteMenuItem);
+router.get("/", MenuController_1.MenuController.getAll); // READ ALL
+router.get("/:id", MenuController_1.MenuController.getById); // READ ONE
+router.post("/", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, MenuController_1.MenuController.create); // CREATE
+router.put("/:id", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, MenuController_1.MenuController.update); // UPDATE
+router.delete("/:id", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, MenuController_1.MenuController.delete); // DELETE
 exports.default = router;

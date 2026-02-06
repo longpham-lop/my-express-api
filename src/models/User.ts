@@ -56,7 +56,10 @@ User.init(
     },
     role_id: {
       type: DataTypes.INTEGER,
+      defaultValue: 2,
       allowNull: false,
+    
+      
     },
   },
   {
@@ -65,8 +68,8 @@ User.init(
     timestamps: true,
   }
 );
-User.belongsTo(Role, {
-  foreignKey: "role_id",
-});
+// User.belongsTo(Role, {
+//   foreignKey: "role_id",
+// });
 
 export default User;

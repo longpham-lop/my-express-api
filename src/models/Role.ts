@@ -1,5 +1,7 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
+import User from "./User";
+
 
 export interface RoleAttributes {
   id: number;
@@ -35,5 +37,7 @@ Role.init(
     timestamps: false,
   }
 );
-
+// Role.hasMany(User,{
+//   foreignKey:"id"
+// })
 export default Role;

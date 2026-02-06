@@ -43,7 +43,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/tables', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
-app.use('/api/category', categoryRouter);
+app.use('/api/categories', categoryRouter);
 app.use('/api/reservations', reservationRouter);
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);

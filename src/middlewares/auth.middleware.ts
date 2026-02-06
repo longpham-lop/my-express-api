@@ -24,7 +24,7 @@ export const authMiddleware = async (
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET!
-    ) as { id: number };
+    ) as { id: number; role_id: number };
 
     const user = await User.findByPk(decoded.id);
 

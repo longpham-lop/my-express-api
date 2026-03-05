@@ -2,7 +2,7 @@ import { Router } from "express";
 import {
   getAllReservations,
   createReservation,
-//   cancelReservation,
+  cancelReservation,
   getAllReservationsAdmin
 } from "../controllers/ReservationController";
 
@@ -16,11 +16,11 @@ const router = Router();
  */
 router.post("/", authMiddleware, createReservation);              // tạo reservation
 router.get("/", authMiddleware, getAllReservations);              // xem reservation của mình
-// router.put("/:id/cancel", authMiddleware, cancelReservation);     // hủy reservation
+router.put("/:id/cancel", authMiddleware, cancelReservation);     // hủy reservation
 
 /**
  * ADMIN
  */
-router.get("/admin/all", authMiddleware, isAdmin, getAllReservationsAdmin);
+router.get("/admin", authMiddleware, isAdmin, getAllReservationsAdmin);
 
 export default router;

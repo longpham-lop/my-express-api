@@ -40,7 +40,7 @@ app.set('views', path.join(__dirname, 'views'));
 
 
 app.use('/api/auth', authRouter);
-app.use('/api/tables', tableRouter);
+app.use('/api/table', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/categories', categoryRouter);

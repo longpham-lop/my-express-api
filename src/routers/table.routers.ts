@@ -1,9 +1,15 @@
 import { Router } from "express";
-import { TableController } from "../controllers/TableController";
+import { getAllTable,
+        createTable,
+        updateStatus
+ } from "../controllers/TableController";
+ import { authMiddleware } from "../middlewares/auth.middleware";
+ import { isAdmin } from "../middlewares/role.middleware";
 
 const router = Router();
 
-router.get("/", TableController.getAll);
-router.put("/:id/status", TableController.updateStatus);
+router.post("/", createTable);
+router.get("/", getAllTable);
+router.put("/:id/status", authMiddleware, isAdmin, updateStatus);
 
 export default router;

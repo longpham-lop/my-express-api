@@ -2,12 +2,12 @@
   "name": "my-express-api",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "indexs.js",
   "scripts": {
-    "start": "nodemon --exec ts-node src/index.ts",
+    "start": "nodemon --exec ts-node src/indexs.ts",
     "build": "tsc",
-    "serve": "node dist/index.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
+    "serve": "node dist/indexs.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/indexs.ts"
   },
   "author": "",
   "license": "ISC",

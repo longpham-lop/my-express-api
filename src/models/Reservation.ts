@@ -1,10 +1,32 @@
-import { DataTypes } from "sequelize";
+import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
 import User from "./User";
-import Table from "./Table"; 
+import Table from "./Table";
 
-const Reservation = sequelize.define(
-  "Reservation",
+// Interface định nghĩa các field
+export interface ReservationAttributes {
+  id: number;
+  user_id: number;
+  table_id: number;
+  reservation_time: Date;
+  status: string;
+}
+
+// id là optional khi tạo
+type ReservationCreationAttributes = Optional<ReservationAttributes, "id">;
+
+class Reservation
+  extends Model<ReservationAttributes, ReservationCreationAttributes>
+  implements ReservationAttributes
+{
+  public id!: number;
+  public user_id!: number;
+  public table_id!: number;
+  public reservation_time!: Date;
+  public status!: string;
+}
+
+Reservation.init(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     user_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -13,6 +35,7 @@ const Reservation = sequelize.define(
     status: { type: DataTypes.STRING, defaultValue: "pending" },
   },
   {
+    sequelize,
     tableName: "reservations",
     timestamps: true,
   }

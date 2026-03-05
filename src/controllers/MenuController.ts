@@ -2,9 +2,9 @@ import { Request, Response } from "express";
 import MenuItem from "../models/Menu";
 import Category from "../models/Category";
 
-export class MenuController {
+
   // CREATE
-  static async create(req: Request, res: Response) {
+  export const createMenuItem = async (req: Request, res: Response) => {
     try {
       const { name, price, categoryId, description, image } = req.body;
 
@@ -38,7 +38,7 @@ export class MenuController {
   }
 
   // GET ALL
-  static async getAll(req: Request, res: Response) {
+  export const getAllMenuItems = async (req: Request, res: Response) => {
     try {
       const items = await MenuItem.findAll({
         include: [
@@ -58,7 +58,7 @@ export class MenuController {
   }
 
   // GET BY ID
-  static async getById(req: Request, res: Response) {
+  export const getMenuItemById = async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
 
@@ -77,7 +77,7 @@ export class MenuController {
   }
 
   // UPDATE
-  static async update(req: Request, res: Response) {
+  export const updateMenuItem = async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
 
@@ -98,7 +98,7 @@ export class MenuController {
   }
 
   // DELETE
-  static async delete(req: Request, res: Response) {
+  export const deleteMenuItem = async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
 
@@ -114,4 +114,4 @@ export class MenuController {
       return res.status(500).json({ message: err.message });
     }
   }
-}
+

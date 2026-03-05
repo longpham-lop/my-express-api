@@ -69,7 +69,7 @@ export const createOrderItem = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 };
-
+  
 export const deleteOrderItem = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user) {
@@ -103,6 +103,51 @@ export const deleteOrderItem = async (req: AuthRequest, res: Response) => {
     await order.update({ total_price });
 
     res.json({ message: "Deleted successfully" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+export const updateOrderItem = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const id = Number(req.params.id);
+    const { quantity } = req.body;
+
+    if (!quantity) {
+      return res.status(400).json({ message: "Quantity là bắt buộc" });
+    }
+
+    const item = await OrderItem.findByPk(id);
+
+    if (!item) {
+      return res.status(404).json({ message: "OrderItem không tồn tại" });
+    }
+
+    const order = await Order.findByPk(item.order_id);
+
+    if (!order || order.user_id !== req.user.id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // update quantity
+    await item.update({ quantity });
+
+    // cập nhật total_price
+    const items = await OrderItem.findAll({
+      where: { order_id: order.id },
+    });
+
+    const total_price = items.reduce(
+      (sum, i: any) => sum + i.unit_price * i.quantity,
+      0
+    );
+
+    await order.update({ total_price });
+
+    res.json(item);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

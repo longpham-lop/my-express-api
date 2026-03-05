@@ -2,18 +2,20 @@ import { Router } from "express";
 import {
   getMyOrderItems,
   createOrderItem,
-  deleteOrderItem
+  deleteOrderItem,
+  updateOrderItem
 } from "../controllers/OrderItemController";
+import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = Router();
 
 // Lấy tất cả order items
-router.get("/", getMyOrderItems);
-
+router.get("/", authMiddleware, getMyOrderItems);
+  
 // Tạo order item
-router.post("/", createOrderItem);
+router.post("/", authMiddleware, createOrderItem);
 
 // Xóa order item theo id
-router.delete("/:id", deleteOrderItem);
-
+router.delete("/:id", authMiddleware, deleteOrderItem);
+router.put("/:id", authMiddleware, updateOrderItem);
 export default router;

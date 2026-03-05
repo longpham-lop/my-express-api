@@ -64,7 +64,7 @@ export const register = async (req: Request, res: Response) => {
       name,
       email,
       password: hashedPassword,
-      role_id: 1, // USER
+      role_id: 2, // USER
     });
 
     // 5️⃣ Không trả password

@@ -27,7 +27,7 @@ class User
   public role_id!: number;
 
   // association
-  public Role?: any;
+  public role?: Role;
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -58,7 +58,7 @@ User.init(
       type: DataTypes.INTEGER,
       defaultValue: 2,
       allowNull: false,
-    
+      
       
     },
   },
@@ -68,8 +68,6 @@ User.init(
     timestamps: true,
   }
 );
-// User.belongsTo(Role, {
-//   foreignKey: "role_id",
-// });
+   
 
 export default User;

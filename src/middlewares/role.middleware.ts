@@ -6,7 +6,8 @@ export const isAdmin = (
   res: Response,
   next: NextFunction
 ) => {
-  if (req.user?.role_id !== 1) {
+   console.log("CHECK ROLE:", req.user);
+  if (!req.user || req.user.role !== "admin") {
     return res.status(403).json({ message: "Admin only" });
   }
   next();

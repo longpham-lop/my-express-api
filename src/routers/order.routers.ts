@@ -7,11 +7,11 @@ import {
   updateOrderStatus,
   deleteOrder,
 } from "../controllers/OrderController";
-import { authMiddleware } from "../middlewares/auth.middleware";
+// import { authMiddleware } from "../middlewares/auth.middleware";
 
 const router = Router();
 
-router.use(authMiddleware);
+// router.use(authMiddleware);
 
 router.get("/", getAllOrders);           // /api/orders
 router.get("/my", getMyOrders);           // /api/orders/my

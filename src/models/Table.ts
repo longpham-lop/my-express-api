@@ -2,21 +2,44 @@
 import { DataTypes, Model } from "sequelize";
 import sequelize from "../config/db";
 
-class Table extends Model {
+// 1️⃣ Interface
+export interface TableAttributes {
+  id?: number;
+  name: string;
+  capacity: number;
+  status?: string;
+}
+
+// 2️⃣ Model class
+class TableModel extends Model<TableAttributes> implements TableAttributes {
   public id!: number;
+  public name!: string;
+  public capacity!: number;
   public status!: string;
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
 
-Table.init(
+// 3️⃣ Init model
+TableModel.init(
   {
     id: {
       type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true,
     },
+
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+
+    capacity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+
     status: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -30,4 +53,4 @@ Table.init(
   }
 );
 
-export default Table;
+export default TableModel;

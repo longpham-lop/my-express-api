@@ -1,5 +1,7 @@
 import express from 'express';
 import dotenv from "dotenv";
+import cors from "cors";
+
 dotenv.config();
 
 
@@ -36,6 +38,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.use(cors({
+  origin: "http://localhost:5173",
+}));
 
 
 
@@ -58,7 +63,7 @@ const testSync = async () => {
     console.log("Database connected successfully✅!");
 
     // Sync tất cả model với database
-    await sequelize.sync({ alter: true }); 
+    await sequelize.sync(); 
     console.log("All models were synchronized successfully!");
   } catch (err) {
     console.error("Unable to connect or sync:", err);
@@ -78,5 +83,5 @@ const initRoles = async () => {
   await sequelize.sync();
   await initRoles();
 })();
-console.log("JWT_SECRET =", process.env.JWT_SECRET);
+
 testSync();

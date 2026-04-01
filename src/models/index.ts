@@ -18,22 +18,24 @@ const sequelize = new Sequelize('database', 'username', 'password', {
 // Now that both classes are fully loaded, we can link them safely.
 
 Role.hasMany(User, { 
-  foreignKey: 'role_id' 
+  foreignKey: 'role_id',
+  as: 'users',  
 });
 
 User.belongsTo(Role, { 
-  foreignKey: 'role_id' 
+  foreignKey: 'role_id',
+  as: 'role',
 });
 
-Menu.belongsTo(Categories, {
-    foreignKey: "category_id",
-    as: "category",
-});
+// Menu.belongsTo(Categories, {
+//     foreignKey: "category_id",
+//     as: "category",
+// });
 
-Categories.hasMany(Menu, {
-    foreignKey: "category_id",
-    as: "items",
-});
+// Categories.hasMany(Menu, {
+//     foreignKey: "category_id",
+//     as: "items",
+// });
 
 // Sync database (optional, depending on where you do this)
 // await sequelize.sync({ alter: true });

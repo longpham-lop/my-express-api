@@ -12,6 +12,7 @@ export interface MenuItemAttributes {
   createdAt?: Date;
   updatedAt?: Date;
   image: string;
+  isActive?: boolean;
 }
 
 class Menu
@@ -27,6 +28,7 @@ class Menu
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
+  public isActive!: boolean;
 }
 
 // Khởi tạo model
@@ -55,7 +57,12 @@ Menu.init(
       allowNull: true,
     },
     image: {
-      type: DataTypes.STRING,
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
     }
   },
   {

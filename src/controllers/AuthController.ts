@@ -1,6 +1,5 @@
 import jwt from "jsonwebtoken";
-import User from "../models/User";
-import Role from "../models/Role";
+import { User, Role } from "../models";
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 
@@ -10,7 +9,13 @@ export const login = async (req: Request, res: Response) => {
 
     const user = (await User.findOne({
       where: { email },
-    })) as InstanceType<typeof User> | null;
+      include: [
+        {
+          model: Role,
+          as: "role",
+        },
+      ],
+    })); 
 
     if (!user) {
       return res.status(400).json({ message: "Sai email hoặc mật khẩu" });
@@ -26,7 +31,7 @@ export const login = async (req: Request, res: Response) => {
     const token = jwt.sign(
       {
         id: user.getDataValue("id"),
-        role_id: user.getDataValue("role_id"),
+        role: user.role?.name,
       },
       process.env.JWT_SECRET!,
       { expiresIn: "1d" }

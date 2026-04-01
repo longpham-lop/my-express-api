@@ -6,7 +6,7 @@ import Role from "../models/Role";
 export interface AuthRequest extends Request {
   user?: {
     id: number;
-    role_id: number;
+    role?: string;
   };
 }
 
@@ -17,6 +17,7 @@ export const authMiddleware = async (
 ) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
+
     if (!token) {
       return res.status(401).json({ message: "No token" });
     }
@@ -24,21 +25,18 @@ export const authMiddleware = async (
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET!
-    ) as { id: number; role_id: number };
+    ) as { id: number; role: string };
 
-    const user = await User.findByPk(decoded.id);
-
-    if (!user) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    console.log("DECODED:", decoded);
 
     req.user = {
-      id: user.id,
-      role_id: user.role_id, // ✅ number
+      id: decoded.id,
+      role: decoded.role,
     };
 
     next();
-  } catch {
+  } catch (err) {
+    console.log("JWT ERROR:", err);
     return res.status(401).json({ message: "Invalid token" });
   }
 };

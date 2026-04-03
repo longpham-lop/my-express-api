@@ -1,18 +1,12 @@
-// models/Category.ts
 import { DataTypes, Model } from "sequelize";
 import sequelize from "../config/db";
 
-// 1️⃣ Khai báo interface cho các field
 export interface CategoryAttributes {
   id?: number;
   name: string;
 }
 
-// 2️⃣ Tạo class Model chuẩn
-class CategoryModel
-  extends Model<CategoryAttributes>
-  implements CategoryAttributes
-{
+class Category extends Model<CategoryAttributes> implements CategoryAttributes {
   public id!: number;
   public name!: string;
 
@@ -20,20 +14,11 @@ class CategoryModel
   public readonly updatedAt!: Date;
 }
 
-// 3️⃣ Khởi tạo model với init
-CategoryModel.init(
+// Khởi tạo model
+Category.init(
   {
-    id: { 
-      type: DataTypes.INTEGER, 
-      primaryKey: true, 
-      autoIncrement: true 
-    },
-
-    name: { 
-      type: DataTypes.STRING, 
-      allowNull: false, 
-      unique: true 
-    },
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    name: { type: DataTypes.STRING, allowNull: false, unique: true },
   },
   {
     sequelize,
@@ -42,4 +27,4 @@ CategoryModel.init(
   }
 );
 
-export default CategoryModel;
+export default Category;

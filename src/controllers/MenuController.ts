@@ -99,19 +99,27 @@ import Category from "../models/Category";
 
   // DELETE
   export const deleteMenuItem = async (req: Request, res: Response) => {
-    try {
-      const id = Number(req.params.id);
+  try {
+    const id = Number(req.params.id);
 
-      const item = await MenuItem.findByPk(id);
-      if (!item) {
-        return res.status(404).json({ message: "Menu item not found" });
-      }
-
-      await item.destroy();
-
-      return res.json({ message: "Menu item deleted successfully" });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+    const item = await MenuItem.findByPk(id);
+    if (!item) {
+      return res.status(404).json({ message: "Menu item not found" });
     }
+
+    await item.destroy();
+
+    return res.json({ message: "Menu item deleted successfully" });
+
+  } catch (err: any) {
+    // 👇 bắt lỗi FK
+    if (err.name === "SequelizeForeignKeyConstraintError") {
+      return res.status(400).json({
+        message: "Không thể xóa vì món ăn đã có trong đơn hàng!",
+      });
+    }
+
+    return res.status(500).json({ message: err.message });
   }
+};
 

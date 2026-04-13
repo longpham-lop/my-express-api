@@ -6,10 +6,12 @@ import Table from "./Table";
 // Interface định nghĩa các field
 export interface ReservationAttributes {
   id: number;
-  user_id: number;
+  user_id?: number;
   table_id: number;
   reservation_time: Date;
   status: string;
+  customer_name?: string; // thêm tên khách hàng
+  phone?: string; // thêm số điện thoại
 }
 
 // id là optional khi tạo
@@ -20,19 +22,23 @@ class Reservation
   implements ReservationAttributes
 {
   public id!: number;
-  public user_id!: number;
+  public user_id?: number;
   public table_id!: number;
   public reservation_time!: Date;
   public status!: string;
+  public customer_name?: string;
+  public phone?: string;
 }
 
 Reservation.init(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    user_id: { type: DataTypes.INTEGER, allowNull: false },
+    user_id: { type: DataTypes.INTEGER, allowNull: true },
     table_id: { type: DataTypes.INTEGER, allowNull: false },
     reservation_time: { type: DataTypes.DATE, allowNull: false },
     status: { type: DataTypes.STRING, defaultValue: "pending" },
+    customer_name: { type: DataTypes.STRING, allowNull: false }, // thêm tên khách hàng
+    phone: { type: DataTypes.STRING, allowNull: true }, // thêm số điện thoại
   },
   {
     sequelize,

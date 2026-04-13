@@ -1,51 +1,103 @@
 import { Request, Response } from "express";
 import User from "../models/User";
+import bcrypt from "bcrypt";
 
-export class UserController {
+/* ===== CREATE ===== */
+export const createUser = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password } = req.body;
 
-  // Tạo mới user
-  static async create(req: Request, res: Response) {
-    try {
-      const user = await User.create(req.body);
-      res.status(201).json(user);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        message: "name, email, password là bắt buộc",
+      });
     }
-  }
 
-  // Lấy tất cả user
-  static async getAll(req: Request, res: Response) {
-    try {
-      const users = await User.findAll();
-      res.json(users);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    // check email tồn tại
+    const exist = await User.findOne({ where: { email } });
+    if (exist) {
+      return res.status(409).json({
+        message: "Email đã tồn tại",
+      });
     }
-  }
 
-  // Lấy user theo ID
-  static async getById(req: Request, res: Response) {
-    try {
-      const id = Number(req.params.id);
-      const user = await User.findByPk(id);
-      if (!user) return res.status(404).json({ message: "Not found" });
-      res.json(user);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    // hash password
+    const hashed = await bcrypt.hash(password, 10);
+
+    const user = await User.create({
+      name,
+      email,
+      password: hashed,
+      role_id: 2, // mặc định user
+    });
+
+    return res.status(201).json({
+      id: user.get("id"),
+      name: user.get("name"),
+      email: user.get("email"),
+      role_id: user.get("role_id"),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/* ===== GET ALL ===== */
+export const getUsers = async (req: Request, res: Response) => {
+  try {
+    const users = await User.findAll({
+      attributes: ["id", "name", "email", "role_id"], // ❌ không trả password
+      order: [["id", "DESC"]],
+    });
+
+    return res.json(users);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/* ===== GET BY ID ===== */
+export const getUserById = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "ID không hợp lệ" });
     }
-  }
 
-  // Xóa user
-  static async delete(req: Request, res: Response) {
-    try {
-      const id = Number(req.params.id);
-      const user = await User.findByPk(id);
-      if (!user) return res.status(404).json({ message: "Not found" });
+    const user = await User.findByPk(id, {
+      attributes: ["id", "name", "email", "role_id"],
+    });
 
-      await user.destroy(); // ✅ dùng destroy() thay cho delete()
-      res.json({ message: "Deleted" });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    if (!user) {
+      return res.status(404).json({ message: "User không tồn tại" });
     }
+
+    return res.json(user);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-}
+};
+
+/* ===== DELETE ===== */
+export const deleteUser = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "ID không hợp lệ" });
+    }
+
+    const user = await User.findByPk(id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User không tồn tại" });
+    }
+
+    await user.destroy();
+
+    return res.json({ message: "Xóa user thành công" });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};

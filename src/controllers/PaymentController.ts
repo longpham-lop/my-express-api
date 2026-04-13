@@ -1,49 +1,59 @@
-// src/controllers/payment.controller.ts
 import { Request, Response } from "express";
 import Payment from "../models/Payment";
 import Order from "../models/Order";
 
-// CREATE PAYMENT
+/* ===== CREATE ===== */
 export const createPayment = async (req: Request, res: Response) => {
   try {
     const { order_id, method } = req.body;
 
-    // validate order_id
-    if (!order_id) {
-      return res.status(400).json({ message: "order_id là bắt buộc" });
+    if (!order_id || !method) {
+      return res.status(400).json({
+        message: "order_id và method là bắt buộc",
+      });
     }
 
-    // validate method
     const validMethods = ["cash", "momo", "vnpay", "bank"];
     if (!validMethods.includes(method)) {
-      return res.status(400).json({ message: "Phương thức thanh toán không hợp lệ" });
+      return res.status(400).json({
+        message: "Phương thức thanh toán không hợp lệ",
+      });
     }
 
-    // tìm order
-    const order = await Order.findByPk(order_id);
+    const orderId = Number(order_id);
+    if (isNaN(orderId)) {
+      return res.status(400).json({
+        message: "order_id không hợp lệ",
+      });
+    }
+
+    const order = await Order.findByPk(orderId);
 
     if (!order) {
-      return res.status(404).json({ message: "Order không tồn tại" });
+      return res.status(404).json({
+        message: "Order không tồn tại",
+      });
     }
 
-    // check order đã có payment chưa
-    const existingPayment = await Payment.findOne({
-      where: { order_id },
+    // ❗ tránh thanh toán lại
+    const exist = await Payment.findOne({
+      where: { order_id: orderId },
     });
 
-    if (existingPayment) {
-      return res.status(400).json({ message: "Order đã được thanh toán" });
+    if (exist) {
+      return res.status(400).json({
+        message: "Order đã được thanh toán",
+      });
     }
 
-    // tạo payment
     const payment = await Payment.create({
-      order_id,
+      order_id: orderId,
       method,
       amount: order.total_price,
       status: "success",
     });
 
-    // update trạng thái order
+    // update order
     await order.update({
       status: "paid",
     });
@@ -54,18 +64,15 @@ export const createPayment = async (req: Request, res: Response) => {
     });
 
   } catch (err: any) {
-    console.error("Payment error:", err);
-    res.status(500).json({
+    return res.status(500).json({
       message: "Lỗi server",
       error: err.message,
     });
   }
 };
 
-
-
-// GET ALL PAYMENTS
-export const getAllPayments = async (req: Request, res: Response) => {
+/* ===== GET ALL ===== */
+export const getPayments = async (req: Request, res: Response) => {
   try {
     const payments = await Payment.findAll({
       include: [
@@ -77,21 +84,25 @@ export const getAllPayments = async (req: Request, res: Response) => {
       order: [["id", "DESC"]],
     });
 
-    res.json(payments);
+    return res.json(payments);
   } catch (err: any) {
-    res.status(500).json({
+    return res.status(500).json({
       message: "Lỗi server",
       error: err.message,
     });
   }
 };
 
-
-
-// GET PAYMENT BY ID
+/* ===== GET BY ID ===== */
 export const getPaymentById = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        message: "ID không hợp lệ",
+      });
+    }
 
     const payment = await Payment.findByPk(id, {
       include: [
@@ -108,22 +119,26 @@ export const getPaymentById = async (req: Request, res: Response) => {
       });
     }
 
-    res.json(payment);
+    return res.json(payment);
 
   } catch (err: any) {
-    res.status(500).json({
+    return res.status(500).json({
       message: "Lỗi server",
       error: err.message,
     });
   }
 };
 
-
-
-// GET PAYMENT BY ORDER
+/* ===== GET BY ORDER ===== */
 export const getPaymentByOrder = async (req: Request, res: Response) => {
   try {
     const orderId = Number(req.params.orderId);
+
+    if (isNaN(orderId)) {
+      return res.status(400).json({
+        message: "orderId không hợp lệ",
+      });
+    }
 
     const payment = await Payment.findOne({
       where: { order_id: orderId },
@@ -141,26 +156,29 @@ export const getPaymentByOrder = async (req: Request, res: Response) => {
       });
     }
 
-    res.json(payment);
+    return res.json(payment);
 
   } catch (err: any) {
-    res.status(500).json({
+    return res.status(500).json({
       message: "Lỗi server",
       error: err.message,
     });
   }
 };
 
-
-
-// UPDATE PAYMENT STATUS
+/* ===== UPDATE STATUS ===== */
 export const updatePaymentStatus = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { status } = req.body;
 
-    const validStatus = ["pending", "success", "failed"];
+    if (isNaN(id)) {
+      return res.status(400).json({
+        message: "ID không hợp lệ",
+      });
+    }
 
+    const validStatus = ["pending", "success", "failed"];
     if (!validStatus.includes(status)) {
       return res.status(400).json({
         message: "Status không hợp lệ",
@@ -175,16 +193,15 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
       });
     }
 
-    payment.status = status;
-    await payment.save();
+    await payment.update({ status });
 
-    res.json({
+    return res.json({
       message: "Cập nhật payment thành công",
       data: payment,
     });
 
   } catch (err: any) {
-    res.status(500).json({
+    return res.status(500).json({
       message: "Lỗi server",
       error: err.message,
     });

@@ -28,18 +28,29 @@ export const login = async (req: Request, res: Response) => {
     if (!isMatch) {
       return res.status(400).json({ message: "Sai email hoặc mật khẩu" });
     }
+
+    const roleName = (user as any).role?.name || "user";
+
     const token = jwt.sign(
       {
         id: user.getDataValue("id"),
-        role: user.role?.name,
+        role: user.getDataValue("role_id") === 1 ? "admin" : "user",
       },
       process.env.JWT_SECRET!,
       { expiresIn: "1d" }
     );
 
-    res.json({ token });
+    res.json({ token,
+      user: {
+        id: user.get("id"),
+        name: user.get("name"),
+        email: user.get("email"),
+        role: roleName,
+      },
+     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.log("login error:", err);
+    return res.status(500).json({ error: err.message });
   }
 };
 

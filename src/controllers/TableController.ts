@@ -81,3 +81,58 @@ export const updateStatus = async (req: Request, res: Response) => {
     });
   }
 };
+/* ===== GET BY ID ===== */
+export const getTableById = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    const table = await Table.findByPk(id);
+
+    if (!table) {
+      return res.status(404).json({ message: "Table not found" });
+    }
+
+    res.json(table);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ===== UPDATE FULL ===== */
+export const updateTable = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    const table = await Table.findByPk(id);
+    if (!table) {
+      return res.status(404).json({ message: "Table not found" });
+    }
+
+    await table.update(req.body);
+
+    res.json({
+      message: "Update table success",
+      data: table,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ===== DELETE ===== */
+export const deleteTable = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    const table = await Table.findByPk(id);
+    if (!table) {
+      return res.status(404).json({ message: "Table not found" });
+    }
+
+    await table.destroy();
+
+    res.json({ message: "Delete table success" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};

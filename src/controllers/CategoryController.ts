@@ -1,19 +1,22 @@
-// src/controllers/category.controller.ts
 import { Request, Response } from "express";
 import Category from "../models/Category";
 
-// CREATE
+/* ================= CREATE ================= */
 export const createCategory = async (req: Request, res: Response) => {
   try {
     const { name } = req.body;
 
     if (!name) {
-      return res.status(400).json({ message: "Category name is required" });
+      return res.status(400).json({
+        message: "Category name is required",
+      });
     }
 
     const exist = await Category.findOne({ where: { name } });
     if (exist) {
-      return res.status(409).json({ message: "Category already exists" });
+      return res.status(409).json({
+        message: "Category already exists",
+      });
     }
 
     const category = await Category.create({ name });
@@ -22,94 +25,120 @@ export const createCategory = async (req: Request, res: Response) => {
       message: "Category created successfully",
       data: category,
     });
-  } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
 };
 
-// GET ALL
-export const getAllCategories = async (req: Request, res: Response) => {
+/* ================= GET ALL ================= */
+export const getAllCategories = async (_: Request, res: Response) => {
   try {
-    const categories = await Category.findAll({
+    const data = await Category.findAll({
       order: [["id", "DESC"]],
     });
 
-    return res.json(categories);
-  } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+    res.json(data);
+
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
   }
 };
 
-// GET BY ID
+/* ================= GET BY ID ================= */
 export const getCategoryById = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
 
     if (isNaN(id)) {
-      return res.status(400).json({ message: "Invalid category id" });
+      return res.status(400).json({
+        message: "Invalid category id",
+      });
     }
 
-    const category = await Category.findByPk(id);
+    const data = await Category.findByPk(id);
 
-    if (!category) {
-      return res.status(404).json({ message: "Category not found" });
+    if (!data) {
+      return res.status(404).json({
+        message: "Category not found",
+      });
     }
 
-    return res.json(category);
-  } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+    res.json(data);
+
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
   }
 };
 
-// UPDATE
+/* ================= UPDATE ================= */
 export const updateCategory = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { name } = req.body;
 
     if (isNaN(id)) {
-      return res.status(400).json({ message: "Invalid category id" });
+      return res.status(400).json({
+        message: "Invalid category id",
+      });
     }
 
     const category = await Category.findByPk(id);
 
     if (!category) {
-      return res.status(404).json({ message: "Category not found" });
+      return res.status(404).json({
+        message: "Category not found",
+      });
     }
 
-    category.name = name ?? category.name;
-    await category.save();
+    await category.update({
+      name: name ?? category.name,
+    });
 
-    return res.json({
-      message: "Category updated successfully",
+    res.json({
+      message: "Update success",
       data: category,
     });
-  } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
   }
 };
 
-// DELETE
+/* ================= DELETE ================= */
 export const deleteCategory = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
 
     if (isNaN(id)) {
-      return res.status(400).json({ message: "Invalid category id" });
+      return res.status(400).json({
+        message: "Invalid category id",
+      });
     }
 
     const category = await Category.findByPk(id);
 
     if (!category) {
-      return res.status(404).json({ message: "Category not found" });
+      return res.status(404).json({
+        message: "Category not found",
+      });
     }
 
     await category.destroy();
 
-    return res.json({
-      message: "Category deleted successfully",
+    res.json({
+      message: "Delete success",
     });
-  } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+
+  } catch (err: any) {
+
+    // 🔥 giống menu (quan trọng)
+    if (err.name === "SequelizeForeignKeyConstraintError") {
+      return res.status(400).json({
+        message: "Không thể xóa vì category đang được sử dụng!",
+      });
+    }
+
+    res.status(500).json({ message: err.message });
   }
 };

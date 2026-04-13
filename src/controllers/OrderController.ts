@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import Order from "../models/Order";
 import User from "../models/User";
+import OrderItem from "../models/OrderItem";
+import MenuItem from "../models/Menu";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -45,6 +47,35 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
  * - ADMIN: xem bất kỳ order nào
  * - USER: chỉ xem order của mình
  */
+export const getOrderDetail = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+
+    const order = await Order.findByPk(id, {
+      include: [
+        {
+          model: OrderItem,
+          as: "items",
+          include: [
+            {
+              model: MenuItem,
+              as: "menu",
+              attributes: ["name", "price", "image"],
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    res.json(order);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
 export const getOrderById = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user) {

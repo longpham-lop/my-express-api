@@ -2,103 +2,108 @@ import { Request, Response } from "express";
 import MenuItem from "../models/Menu";
 import Category from "../models/Category";
 
+/* ================= CREATE ================= */
+export const createMenuItem = async (req: Request, res: Response) => {
+  try {
+    const { name, price, categoryId, description, image } = req.body;
 
-  // CREATE
-  export const createMenuItem = async (req: Request, res: Response) => {
-    try {
-      const { name, price, categoryId, description, image } = req.body;
-
-      if (!name || !price || !categoryId) {
-        return res.status(400).json({
-          message: "name, price, categoryId are required",
-        });
-      }
-
-      // check category tồn tại
-      const category = await Category.findByPk(categoryId);
-      if (!category) {
-        return res.status(404).json({ message: "Category not found" });
-      }
-
-      const item = await MenuItem.create({
-        name,
-        price,
-        categoryId,
-        description,
-        image,
+    if (!name || !price || !categoryId) {
+      return res.status(400).json({
+        message: "name, price, categoryId are required",
       });
-
-      return res.status(201).json({
-        message: "Menu item created successfully",
-        data: item,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
     }
-  }
 
-  // GET ALL
-  export const getAllMenuItems = async (req: Request, res: Response) => {
-    try {
-      const items = await MenuItem.findAll({
-        include: [
-      {
-        model: Category,
-        as: "category",
-        attributes: ["id", "name"],
-      },
-    ],
-        order: [["id", "DESC"]],
-      });
-
-      return res.json(items);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+    const category = await Category.findByPk(categoryId);
+    if (!category) {
+      return res.status(404).json({ message: "Category not found" });
     }
+
+    const item = await MenuItem.create({
+      name,
+      price,
+      categoryId,
+      description,
+      image,
+    });
+
+    return res.status(201).json({
+      message: "Menu item created successfully",
+      data: item,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
+};
 
-  // GET BY ID
-  export const getMenuItemById = async (req: Request, res: Response) => {
-    try {
-      const id = Number(req.params.id);
+/* ================= GET ALL ================= */
+export const getAllMenuItems = async (req: Request, res: Response) => {
+  try {
+    const items = await MenuItem.findAll({
+      include: [
+        {
+          model: Category,
+          as: "category",
+          attributes: ["id", "name"],
+        },
+      ],
+      order: [["id", "DESC"]],
+    });
 
-      const item = await MenuItem.findByPk(id, {
-        include: Category,
-      });
+    return res.json({
+      message: "Get all menu items success",
+      data: items,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+};
 
-      if (!item) {
-        return res.status(404).json({ message: "Menu item not found" });
-      }
+/* ================= GET BY ID ================= */
+export const getMenuItemById = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
 
-      return res.json(item);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+    const item = await MenuItem.findByPk(id, {
+      include: [
+        {
+          model: Category,
+        },
+      ],
+    });
+
+    if (!item) {
+      return res.status(404).json({ message: "Menu item not found" });
     }
+
+    return res.json(item);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
+};
 
-  // UPDATE
-  export const updateMenuItem = async (req: Request, res: Response) => {
-    try {
-      const id = Number(req.params.id);
+/* ================= UPDATE ================= */
+export const updateMenuItem = async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
 
-      const item = await MenuItem.findByPk(id);
-      if (!item) {
-        return res.status(404).json({ message: "Menu item not found" });
-      }
-
-      await item.update(req.body);
-
-      return res.json({
-        message: "Menu item updated successfully",
-        data: item,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+    const item = await MenuItem.findByPk(id);
+    if (!item) {
+      return res.status(404).json({ message: "Menu item not found" });
     }
-  }
 
-  // DELETE
-  export const deleteMenuItem = async (req: Request, res: Response) => {
+    await item.update(req.body);
+
+    return res.json({
+      message: "Menu item updated successfully",
+      data: item,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+/* ================= DELETE ================= */
+export const deleteMenuItem = async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
 
@@ -109,17 +114,16 @@ import Category from "../models/Category";
 
     await item.destroy();
 
-    return res.json({ message: "Menu item deleted successfully" });
-
+    return res.json({
+      message: "Menu item deleted successfully",
+    });
   } catch (err: any) {
-    // 👇 bắt lỗi FK
     if (err.name === "SequelizeForeignKeyConstraintError") {
       return res.status(400).json({
-        message: "Không thể xóa vì món ăn đã có trong đơn hàng!",
+        message: "Không thể xóa vì món ăn đã tồn tại trong đơn hàng!",
       });
     }
 
     return res.status(500).json({ message: err.message });
   }
 };
-

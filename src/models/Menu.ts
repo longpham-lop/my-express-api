@@ -6,7 +6,7 @@ export interface MenuItemAttributes {
   id?: number;
   name: string;
   price: number;
-  categoryId: number;
+  category_id: number;
   description?: string;
   image: string;
   isActive?: boolean;
@@ -18,7 +18,7 @@ class Menu extends Model<MenuItemAttributes> implements MenuItemAttributes {
   public id!: number;
   public name!: string;
   public price!: number;
-  public categoryId!: number;
+  public category_id!: number;
   public description?: string;
   public image!: string;
   public isActive!: boolean;
@@ -33,7 +33,7 @@ Menu.init(
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
     name: { type: DataTypes.STRING, allowNull: false },
     price: { type: DataTypes.FLOAT, allowNull: false },
-    categoryId: { type: DataTypes.INTEGER, allowNull: false, field: "category_id" },
+    category_id: { type: DataTypes.INTEGER, allowNull: false, field: "category_id" },
     description: { type: DataTypes.STRING, allowNull: true },
     image: { type: DataTypes.TEXT, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
@@ -46,7 +46,7 @@ Menu.init(
 );
 
 // ⚡ Thiết lập quan hệ SAU khi cả 2 model đã init
-Category.hasMany(Menu, { foreignKey: "categoryId", as: "menuItems" });
-Menu.belongsTo(Category, { foreignKey: "categoryId", as: "category" });
+Category.hasMany(Menu, { foreignKey: "category_id", as: "menuItems" });
+Menu.belongsTo(Category, { foreignKey: "category_id", as: "category" });
 
 export default Menu;

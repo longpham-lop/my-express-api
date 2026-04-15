@@ -11,11 +11,11 @@ import { getAllTable,
 
 const router = Router();
 
-router.post("/", createTable);
-router.get("/", getAllTable);
+router.post("/",authMiddleware,isAdmin, createTable);
+router.get("/", authMiddleware, getAllTable);
 router.put("/:id/status", authMiddleware, isAdmin, updateStatus);
-router.get("/:id", getTableById);
-router.put("/:id", updateTable);
-router.delete("/:id", deleteTable);
+router.get("/:id", authMiddleware, getTableById);
+router.put("/:id", authMiddleware, isAdmin, updateTable);
+router.delete("/:id", authMiddleware, isAdmin, deleteTable);
 
 export default router;

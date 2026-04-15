@@ -18,6 +18,7 @@ import reservationRouter from './routers/reservation.routers';
 import userRouter from './routers/user.routers';
 import paymentRouter from './routers/payment.routers';
 import orderItemRouter from './routers/orderItem.routers';
+import dashboardRouter from './routers/dashboard.routers';
 import Role from './models/Role';
 
 const app = express();
@@ -53,6 +54,7 @@ app.use('/api/reservations', reservationRouter);
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
 app.use('/api/order-items', orderItemRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 app.listen(3000, () => {
   console.log('Server chạy http://localhost:3000');

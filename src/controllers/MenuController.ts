@@ -5,23 +5,23 @@ import Category from "../models/Category";
 /* ================= CREATE ================= */
 export const createMenuItem = async (req: Request, res: Response) => {
   try {
-    const { name, price, categoryId, description, image } = req.body;
+    const { name, price, category_id, description, image } = req.body;
 
-    if (!name || !price || !categoryId) {
+    if (!name || !price || !category_id) {
       return res.status(400).json({
-        message: "name, price, categoryId are required",
+        message: "name, price, category_id are required",
       });
     }
 
-    const category = await Category.findByPk(categoryId);
+    const category = await Category.findByPk(category_id);
     if (!category) {
       return res.status(404).json({ message: "Category not found" });
     }
-
+    console.log(req.body);
     const item = await MenuItem.create({
       name,
       price,
-      categoryId,
+      category_id,
       description,
       image,
     });

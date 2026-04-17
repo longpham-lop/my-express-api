@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import Reservation from "../models/Reservation";
 import TableModel from "../models/Table";
+import Order from "../models/Order";
+import OrderItem from "../models/OrderItem";
 
 /* ===== TYPE USER ===== */
 interface AuthUser {
@@ -16,7 +18,7 @@ interface AuthRequest extends Request {
 /* ================= CREATE ================= */
 export const createReservation = async (req: AuthRequest, res: Response) => {
   try {
-    const { table_id, reservation_time, name, phone } = req.body;
+    const { table_id, reservation_time, name, phone, cart } = req.body;
 
     if (!table_id || !reservation_time || !name || !phone) {
       return res.status(400).json({ message: "Thiếu dữ liệu" });
@@ -27,7 +29,6 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Table không tồn tại" });
     }
 
-    // check trùng lịch
     const existing = await Reservation.findOne({
       where: {
         table_id,
@@ -42,23 +43,54 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const userId = req.user?.id;
+
     const reservation = await Reservation.create({
       table_id,
       reservation_time,
       customer_name: name,
       phone,
-      user_id: req.user?.id, // ✅ fix chuẩn
+      user_id: userId,
       status: "pending",
     });
 
+    let order: Order | null = null;
+
+    if (Array.isArray(cart) && cart.length > 0) {
+      const total = cart.reduce(
+        (sum: number, item: { price: number; quantity: number }) =>
+          sum + item.price * item.quantity,
+        0
+      );
+
+      order = await Order.create({
+        reservation_id: reservation.id,
+        user_id: userId ?? undefined,
+        total_price: total,
+        status: "pending",
+      });
+
+      const orderItems = cart.map((item: any) => ({
+        order_id: order!.id,
+        menu_item_id: Number(item.id),
+        quantity: item.quantity,
+        unit_price: item.price,
+      }));
+
+      await OrderItem.bulkCreate(orderItems);
+    }
+
     return res.status(201).json({
       message: "Đặt bàn thành công",
-      data: reservation,
+      data: { reservation, order },
     });
 
   } catch (err: any) {
     console.error("CREATE RESERVATION ERROR:", err);
-    res.status(500).json({ message: "Lỗi server", error: err.message });
+    return res.status(500).json({
+      message: "Lỗi server",
+      error: err.message,
+    });
   }
 };
 

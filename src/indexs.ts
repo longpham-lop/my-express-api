@@ -7,7 +7,7 @@ dotenv.config();
 
 import path from 'path';
 import sequelize from './config/db';
-
+import "./models"; // Import models and associations
 
 import authRouter from './routers/auth.routers';
 import tableRouter from './routers/table.routers';

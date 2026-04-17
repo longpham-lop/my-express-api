@@ -3,18 +3,19 @@ import { DataTypes, Model } from "sequelize";
 import sequelize from "../config/db";
 import User from "./User";
 import Reservation from "./Reservation";
+import OrderItem from "./OrderItem";
 
 // 1️⃣ Khai báo interface cho các field
 export interface OrderAttributes {
   id?: number;
-  user_id: number;
+  user_id?: number;
   reservation_id?: number | null;
   total_price: number;
   status?: string;
 }
 
 // 2️⃣ Tạo class Model chuẩn
-class OrderModel extends Model<OrderAttributes> implements OrderAttributes {
+class Order extends Model<OrderAttributes> implements OrderAttributes {
   public id!: number;
   public user_id!: number;
   public reservation_id!: number | null;
@@ -26,10 +27,10 @@ class OrderModel extends Model<OrderAttributes> implements OrderAttributes {
 }
 
 // 3️⃣ Khởi tạo model với init
-OrderModel.init(
+Order.init(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    user_id: { type: DataTypes.INTEGER, allowNull: false },
+    user_id: { type: DataTypes.INTEGER, allowNull: true },
     reservation_id: { type: DataTypes.INTEGER, allowNull: true },
     total_price: { type: DataTypes.FLOAT, allowNull: false },
     status: { type: DataTypes.STRING, defaultValue: "pending" },
@@ -42,7 +43,8 @@ OrderModel.init(
 );
 
 // 4️⃣ Quan hệ
-OrderModel.belongsTo(User, { foreignKey: "user_id" });
-OrderModel.belongsTo(Reservation, { foreignKey: "reservation_id" });
+Order.belongsTo(User, { foreignKey: "user_id" });
+Order.belongsTo(Reservation, { foreignKey: "reservation_id" });
+// OrderModel.hasMany(OrderItem, {foreignKey: "order_id", as: "items",});
 
-export default OrderModel;
+export default Order;

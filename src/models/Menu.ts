@@ -1,6 +1,6 @@
 import { DataTypes, Model } from "sequelize";
 import sequelize from "../config/db";
-import Category from "./Category"; // import bình thường, Category đã là Model
+
 
 export interface MenuItemAttributes {
   id?: number;
@@ -46,7 +46,6 @@ Menu.init(
 );
 
 // ⚡ Thiết lập quan hệ SAU khi cả 2 model đã init
-Category.hasMany(Menu, { foreignKey: "category_id", as: "menuItems" });
-Menu.belongsTo(Category, { foreignKey: "category_id", as: "category" });
+
 
 export default Menu;

@@ -1,5 +1,7 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
+import Order from "./Order";
+import MenuItem from "./Menu";
 
 export interface OrderItemAttributes {
   id: number;
@@ -55,5 +57,6 @@ OrderItem.init(
     timestamps: true,
   }
 );
+
 
 export default OrderItem;

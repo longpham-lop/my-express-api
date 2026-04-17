@@ -1,13 +1,14 @@
 import { Request, Response } from "express";
 import Order from "../models/Order";
-import User from "../models/User";
+import Reservation from "../models/Reservation";
 import OrderItem from "../models/OrderItem";
 import MenuItem from "../models/Menu";
+import TableModel from "../models/Table";
 
 export interface AuthRequest extends Request {
   user?: {
     id: number;
-    role_id: number;
+    role: string;
   };
 }
 
@@ -23,9 +24,22 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
     }
 
     // ADMIN
-    if (req.user.role_id === 1) {
+    if (req.user.role === "admin") {
       const orders = await Order.findAll({
         order: [["createdAt", "DESC"]],
+        include: [
+        {
+          model: OrderItem,
+          as: "items",
+          include: [
+            {
+              model: MenuItem,
+              as: "menu",
+              attributes: ["name", "price", "image"],
+            },
+          ],
+        },
+        ],
       });
       return res.json(orders);
     }
@@ -81,26 +95,47 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
     if (!req.user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    const id = Number(req.params.id)
-    if(isNaN(id)){
+
+    const id = Number(req.params.id);
+    if (isNaN(id)) {
       return res.status(400).json({ message: "ID không hợp lệ" });
     }
-    const order = await Order.findByPk(id);
+
+    const order = await Order.findByPk(id, {
+      include: [
+        {
+          model: OrderItem,
+          as: "items",
+          include: [
+            {
+              model: MenuItem,
+              as: "menu",
+              attributes: ["name", "price", "image"],
+            },
+          ],
+        },
+      ],
+    });
+
+    // ✅ FIX 1: check null trước
     if (!order) {
       return res.status(404).json({ message: "Order không tồn tại" });
     }
 
-    // USER không được xem order của người khác
-    if (req.user.role_id !== 1 && order.user_id !== req.user.id) {
+    // ✅ FIX 2: sau đó mới check quyền
+    if (req.user.role !== "admin" && order.user_id !== req.user.id) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    res.json(order);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    return res.json(order);
+
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      return res.status(500).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Unknown error" });
   }
 };
-
 /**
  * POST /api/orders
  * - USER: tạo order cho chính mình
@@ -140,7 +175,7 @@ export const updateOrderStatus = async (
   res: Response
 ) => {
   try {
-    if (!req.user || req.user.role_id !== 1) {
+    if (!req.user || req.user.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
     }
     const id = Number(req.params.id)
@@ -155,7 +190,35 @@ export const updateOrderStatus = async (
     }
 
     await order.update({ status });
-    res.json(order);
+
+    // ✅ update reservation theo order
+    if (order.reservation_id) {
+      const reservation = await Reservation.findByPk(order.reservation_id);
+
+      if (reservation) {
+        let reservationStatus = reservation.status;
+
+        if (status === "processing") {
+          reservationStatus = "confirmed";
+        }
+
+        if (status === "completed") {
+          reservationStatus = "completed";
+        }
+
+        await reservation.update({ status: reservationStatus });
+      }
+    
+        if (status === "completed" && reservation) {
+          const table = await TableModel.findByPk(reservation.table_id);
+
+        if (table) {
+          await table.update({ status: "available" });
+      }
+    }
+    }
+    return res.json({ message: "Cập nhật thành công", order });
+
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -167,7 +230,7 @@ export const updateOrderStatus = async (
  */
 export const deleteOrder = async (req: AuthRequest, res: Response) => {
   try {
-    if (!req.user || req.user.role_id !== 1) {
+    if (!req.user || req.user.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
     }
     const id = Number(req.params.id)

@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from "dotenv";
+import cloudinary from './config/cloudinary';
 import cors from "cors";
 
 dotenv.config();
@@ -19,6 +20,7 @@ import userRouter from './routers/user.routers';
 import paymentRouter from './routers/payment.routers';
 import orderItemRouter from './routers/orderItem.routers';
 import dashboardRouter from './routers/dashboard.routers';
+import uploadRoutes from "./routers/upload.routers";
 import Role from './models/Role';
 
 const app = express();
@@ -50,14 +52,16 @@ app.use('/api/table', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/categories', categoryRouter);
-app.use('/api/reservations', reservationRouter);
+app.use('/api/reservations', reservationRouter); 
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
 app.use('/api/order-items', orderItemRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api', uploadRoutes);
 
 app.listen(3000, () => {
   console.log('Server chạy http://localhost:3000');
+  
 });
 const testSync = async () => {
   try {

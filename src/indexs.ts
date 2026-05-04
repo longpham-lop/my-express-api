@@ -1,14 +1,13 @@
 import express from 'express';
 import dotenv from "dotenv";
-import cloudinary from './config/cloudinary';
 import cors from "cors";
-
-dotenv.config();
-
+import { Server } from "socket.io";
+import http from "http";
+import app from "./app";
 
 import path from 'path';
-import sequelize from './config/db';
-import "./models"; // Import models and associations
+import sequelize from './config/db'; 
+import "./models";
 
 import authRouter from './routers/auth.routers';
 import tableRouter from './routers/table.routers';
@@ -23,30 +22,23 @@ import dashboardRouter from './routers/dashboard.routers';
 import uploadRoutes from "./routers/upload.routers";
 import Role from './models/Role';
 
-const app = express();
+dotenv.config();
 
 /* ================= MIDDLEWARE ================= */
-
-// đọc JSON (POSTMAN, FE gửi JSON)
 app.use(express.json());
-
-// đọc form
 app.use(express.urlencoded({ extended: true }));
-app.get('/', (req, res) => {
-  res.send('Backend akelo');
-});
-// public files
-app.use(express.static(path.join(__dirname, '../public')));
 
-
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
 app.use(cors({
   origin: "http://localhost:5173",
 }));
 
+app.use(express.static(path.join(__dirname, '../public')));
 
+app.get('/', (req, res) => {
+  res.send('Backend akelo');
+});
 
+/* ================= ROUTES ================= */
 app.use('/api/auth', authRouter);
 app.use('/api/table', tableRouter);
 app.use('/api/menu', menuRouter);
@@ -59,35 +51,42 @@ app.use('/api/order-items', orderItemRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api', uploadRoutes);
 
-app.listen(3000, () => {
-  console.log('Server chạy http://localhost:3000');
-  
+/* ================= SOCKET ================= */
+const server = http.createServer(app);
+
+export const io = new Server(server, {
+  cors: {
+    origin: "*",
+  },
 });
-const testSync = async () => {
+
+io.on("connection", (socket) => {
+  console.log("🔌 Admin connected:", socket.id);
+});
+
+/* ================= DATABASE ================= */
+const init = async () => {
   try {
-    await sequelize.authenticate(); 
-    console.log("Database connected successfully✅!");
+    await sequelize.authenticate();
+    console.log("✅ Database connected");
 
-    // Sync tất cả model với database
-    await sequelize.sync(); 
-    console.log("All models were synchronized successfully!");
+    await sequelize.sync();
+
+    const roles = ["admin", "user"];
+    for (const name of roles) {
+      await Role.findOrCreate({ where: { name } });
+    }
+
   } catch (err) {
-    console.error("Unable to connect or sync:", err);
+    console.error("❌ DB error:", err);
   }
 };
 
-const initRoles = async () => {
-  const roles = ["admin", "user"];
+init();
 
-  for (const name of roles) {
-    await Role.findOrCreate({
-      where: { name },
-    });
-  }
-};
-(async () => {
-  await sequelize.sync();
-  await initRoles();
-})();
+/* ================= START SERVER ================= */
+const PORT = 3000;
 
-testSync();
+server.listen(PORT, () => {
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
+});

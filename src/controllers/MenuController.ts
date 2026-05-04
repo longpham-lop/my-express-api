@@ -39,6 +39,7 @@ export const createMenuItem = async (req: Request, res: Response) => {
 export const getAllMenuItems = async (req: Request, res: Response) => {
   try {
     const items = await MenuItem.findAll({
+      where: { is_deleted: false },
       include: [
         {
           model: Category,
@@ -112,7 +113,7 @@ export const deleteMenuItem = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Menu item not found" });
     }
 
-    await item.destroy();
+    await item.update({ is_deleted: true });
 
     return res.json({
       message: "Menu item deleted successfully",
@@ -126,4 +127,5 @@ export const deleteMenuItem = async (req: Request, res: Response) => {
 
     return res.status(500).json({ message: err.message });
   }
+  
 };

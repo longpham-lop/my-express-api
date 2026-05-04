@@ -12,6 +12,8 @@ export interface ReservationAttributes {
   status: string;
   customer_name?: string; // thêm tên khách hàng
   phone?: string; // thêm số điện thoại
+  branch?: string; // thêm chi nhánh
+  note?: string; // thêm ghi chú
 }
 
 // id là optional khi tạo
@@ -28,6 +30,8 @@ class Reservation
   public status!: string;
   public customer_name?: string;
   public phone?: string;
+  public branch?: string;
+  public note?: string;
 }
 
 Reservation.init(
@@ -39,6 +43,8 @@ Reservation.init(
     status: { type: DataTypes.STRING, defaultValue: "pending" },
     customer_name: { type: DataTypes.STRING, allowNull: false }, // thêm tên khách hàng
     phone: { type: DataTypes.STRING, allowNull: true }, // thêm số điện thoại
+    branch: { type: DataTypes.STRING, allowNull: true }, // thêm chi nhánh
+    note: { type: DataTypes.TEXT, allowNull: true }, // thêm ghi chú
   },
   {
     sequelize,

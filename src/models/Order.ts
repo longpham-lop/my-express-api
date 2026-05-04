@@ -12,6 +12,7 @@ export interface OrderAttributes {
   reservation_id?: number | null;
   total_price: number;
   status?: string;
+  is_deleted?: boolean;
 }
 
 // 2️⃣ Tạo class Model chuẩn
@@ -21,6 +22,7 @@ class Order extends Model<OrderAttributes> implements OrderAttributes {
   public reservation_id!: number | null;
   public total_price!: number;
   public status!: string;
+  public is_deleted!: boolean;
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -34,6 +36,7 @@ Order.init(
     reservation_id: { type: DataTypes.INTEGER, allowNull: true },
     total_price: { type: DataTypes.FLOAT, allowNull: false },
     status: { type: DataTypes.STRING, defaultValue: "pending" },
+    is_deleted: { type: DataTypes.BOOLEAN, defaultValue: false },
   },
   {
     sequelize,

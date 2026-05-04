@@ -3,7 +3,7 @@ import Reservation from "../models/Reservation";
 import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
-
+import { io } from "../indexs";
 /* ===== TYPE USER ===== */
 interface AuthUser {
   id: number;
@@ -18,7 +18,7 @@ interface AuthRequest extends Request {
 /* ================= CREATE ================= */
 export const createReservation = async (req: AuthRequest, res: Response) => {
   try {
-    const { table_id, reservation_time, name, phone, cart } = req.body;
+    const { table_id, reservation_time, name, phone, branch, note, cart } = req.body;
 
     if (!table_id || !reservation_time || !name || !phone) {
       return res.status(400).json({ message: "Thiếu dữ liệu" });
@@ -50,8 +50,15 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       reservation_time,
       customer_name: name,
       phone,
+      branch,
+      note,
       user_id: userId,
       status: "pending",
+    });
+    io.emit("new-reservation", {
+      name,
+      phone,
+      time: reservation_time,
     });
 
     let order: Order | null = null;

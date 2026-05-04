@@ -26,6 +26,7 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
     // ADMIN
     if (req.user.role === "admin") {
       const orders = await Order.findAll({
+        where: { is_deleted: false },
         order: [["createdAt", "DESC"]],
         include: [
         {
@@ -242,7 +243,7 @@ export const deleteOrder = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Order không tồn tại" });
     }
 
-    await order.destroy();
+    await order.update({is_deleted: true});
     res.json({ message: "Xóa order thành công" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

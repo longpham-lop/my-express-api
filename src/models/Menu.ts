@@ -12,6 +12,7 @@ export interface MenuItemAttributes {
   isActive?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
+  is_deleted?: boolean;
 }
 
 class Menu extends Model<MenuItemAttributes> implements MenuItemAttributes {
@@ -22,6 +23,7 @@ class Menu extends Model<MenuItemAttributes> implements MenuItemAttributes {
   public description?: string;
   public image!: string;
   public isActive!: boolean;
+  public is_deleted!: boolean;
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -37,6 +39,7 @@ Menu.init(
     description: { type: DataTypes.STRING, allowNull: true },
     image: { type: DataTypes.TEXT, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
+    is_deleted: { type: DataTypes.BOOLEAN, defaultValue: false },
   },
   {
     sequelize,

@@ -3,6 +3,7 @@ import Reservation from "../models/Reservation";
 import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
+import sgMail from "../config/sendgrid"; // 
 import { io } from "../indexs";
 /* ===== TYPE USER ===== */
 interface AuthUser {
@@ -14,21 +15,39 @@ interface AuthUser {
 interface AuthRequest extends Request {
   user?: AuthUser;
 }
-
+const branchMap: Record<string, string> = {
+  "1": "Nhà hàng Vị Nhà 86 Ngọc Khánh",
+  "2": "Nhà hàng Vị Nhà 67A Phó Đức Chính",
+  "3": "Nhà hàng Vị Nhà 10 Khúc Thừa Dụ",
+  "4": "Nhà hàng Vị Nhà 19 Nguyễn Văn Huyên"
+};
 /* ================= CREATE ================= */
 export const createReservation = async (req: AuthRequest, res: Response) => {
   try {
-    const { table_id, reservation_time, name, phone, branch, note, cart } = req.body;
+    const {
+      table_id,
+      reservation_time,
+      name,
+      phone,
+      email, // ✅ FIX
+      branch,
+      note,
+      cart,
+      guest_count,
+    } = req.body;
 
-    if (!table_id || !reservation_time || !name || !phone) {
+    // ✅ Validate
+    if (!table_id || !reservation_time || !name || !phone || !email) {
       return res.status(400).json({ message: "Thiếu dữ liệu" });
     }
 
+    // ✅ Check bàn
     const table = await TableModel.findByPk(table_id);
     if (!table) {
       return res.status(404).json({ message: "Table không tồn tại" });
     }
-
+    const branchName = branchMap[branch] || "Không xác định";
+    // ✅ Check trùng
     const existing = await Reservation.findOne({
       where: {
         table_id,
@@ -45,16 +64,20 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
 
     const userId = req.user?.id;
 
+    // ✅ Tạo reservation
     const reservation = await Reservation.create({
       table_id,
       reservation_time,
       customer_name: name,
       phone,
+      email,
       branch,
       note,
+      guest_count,
       user_id: userId,
       status: "pending",
     });
+
     io.emit("new-reservation", {
       name,
       phone,
@@ -63,10 +86,10 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
 
     let order: Order | null = null;
 
+    // ✅ Tạo order nếu có cart
     if (Array.isArray(cart) && cart.length > 0) {
       const total = cart.reduce(
-        (sum: number, item: { price: number; quantity: number }) =>
-          sum + item.price * item.quantity,
+        (sum: number, item: any) => sum + item.price * item.quantity,
         0
       );
 
@@ -87,6 +110,29 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       await OrderItem.bulkCreate(orderItems);
     }
 
+    // ✅ Gửi email (SAU KHI THÀNH CÔNG)
+    const msg = {
+      to: email,
+      from: "tuanlongp70@gmail.com", 
+      subject: "Xác nhận đặt bàn",
+      text: `
+        Xin chào ${name},
+
+        Bạn đã đặt bàn thành công!
+
+        📍 Cơ sở: ${branchName}
+        ⏰ Thời gian: ${reservation_time}
+        📞 SĐT: ${phone}
+        📅 Ngày: ${reservation_time.split(" ")[0]}
+        ⏰ Giờ: ${reservation_time.split(" ")[1]}
+
+        Khi đến nhà hàng, hãy báo tên hoặc số điện thoại cho lễ tân. Cảm ơn bạn!
+      `,
+    };
+
+    await sgMail.send(msg);
+
+    // ✅ Response cuối
     return res.status(201).json({
       message: "Đặt bàn thành công",
       data: { reservation, order },

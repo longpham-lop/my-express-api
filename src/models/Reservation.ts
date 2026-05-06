@@ -10,10 +10,13 @@ export interface ReservationAttributes {
   table_id: number;
   reservation_time: Date;
   status: string;
-  customer_name?: string; // thêm tên khách hàng
-  phone?: string; // thêm số điện thoại
-  branch?: string; // thêm chi nhánh
-  note?: string; // thêm ghi chú
+  customer_name?: string; 
+  phone?: string; 
+  email?: string;
+  branch?: string; 
+  note?: string; 
+  guest_count: number;
+
 }
 
 // id là optional khi tạo
@@ -30,8 +33,10 @@ class Reservation
   public status!: string;
   public customer_name?: string;
   public phone?: string;
+  public email?: string;
   public branch?: string;
   public note?: string;
+  public guest_count!: number;
 }
 
 Reservation.init(
@@ -41,10 +46,12 @@ Reservation.init(
     table_id: { type: DataTypes.INTEGER, allowNull: false },
     reservation_time: { type: DataTypes.DATE, allowNull: false },
     status: { type: DataTypes.STRING, defaultValue: "pending" },
-    customer_name: { type: DataTypes.STRING, allowNull: false }, // thêm tên khách hàng
-    phone: { type: DataTypes.STRING, allowNull: true }, // thêm số điện thoại
-    branch: { type: DataTypes.STRING, allowNull: true }, // thêm chi nhánh
-    note: { type: DataTypes.TEXT, allowNull: true }, // thêm ghi chú
+    customer_name: { type: DataTypes.STRING, allowNull: false }, 
+    phone: { type: DataTypes.STRING, allowNull: true }, 
+    email: {type: DataTypes.STRING, allowNull: true},
+    branch: { type: DataTypes.STRING, allowNull: true }, 
+    note: { type: DataTypes.TEXT, allowNull: true }, 
+    guest_count: { type: DataTypes.INTEGER, allowNull: true},
   },
   {
     sequelize,

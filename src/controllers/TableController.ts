@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import Table from "../models/Table";
+import Reservation from "../models/Reservation";
 
 export const createTable = async (req: Request, res: Response) => {
   try {
@@ -121,18 +122,36 @@ export const updateTable = async (req: Request, res: Response) => {
 
 /* ===== DELETE ===== */
 export const deleteTable = async (req: Request, res: Response) => {
-  try {
+   try {
     const id = Number(req.params.id);
 
     const table = await Table.findByPk(id);
+
     if (!table) {
-      return res.status(404).json({ message: "Table not found" });
+      return res.status(404).json({
+        message: "Không tìm thấy bàn",
+      });
     }
 
+    // Xóa reservation liên quan
+    await Reservation.destroy({
+      where: {
+        table_id: id,
+      },
+    });
+
+    // Xóa bàn
     await table.destroy();
 
-    res.json({ message: "Delete table success" });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    return res.json({
+      message: "Xóa bàn thành công",
+    });
+
+  } catch (err) {
+    console.error("DELETE TABLE ERROR:", err);
+
+    return res.status(500).json({
+      message: "Lỗi server khi xóa bàn",
+    });
   }
 };

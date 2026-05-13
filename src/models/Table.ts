@@ -8,6 +8,7 @@ export interface TableAttributes {
   name: string;
   capacity: number;
   status?: string;
+  type?: "normal" | "vip";
 }
 
 // 2️⃣ Model class
@@ -16,6 +17,7 @@ class TableModel extends Model<TableAttributes> implements TableAttributes {
   public name!: string;
   public capacity!: number;
   public status!: string;
+  public type!: "normal" | "vip";
 
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -45,6 +47,10 @@ TableModel.init(
       allowNull: false,
       defaultValue: "available",
     },
+    type: {
+      type: DataTypes.ENUM("normal", "vip"),
+      defaultValue: "normal",
+    }
   },
   {
     sequelize,

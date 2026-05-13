@@ -110,7 +110,6 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       await OrderItem.bulkCreate(orderItems);
     }
 
-    // ✅ Gửi email (SAU KHI THÀNH CÔNG)
     const msg = {
       to: email,
       from: "tuanlongp70@gmail.com", 

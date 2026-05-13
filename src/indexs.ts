@@ -20,6 +20,7 @@ import paymentRouter from './routers/payment.routers';
 import orderItemRouter from './routers/orderItem.routers';
 import dashboardRouter from './routers/dashboard.routers';
 import uploadRoutes from "./routers/upload.routers";
+import contactRouter from './routers/contact.routers';
 import Role from './models/Role';
 
 dotenv.config();
@@ -50,6 +51,7 @@ app.use('/api/payments', paymentRouter);
 app.use('/api/order-items', orderItemRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api', uploadRoutes);
+app.use('/api/contact', contactRouter);
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);
@@ -61,14 +63,14 @@ export const io = new Server(server, {
 });
 
 io.on("connection", (socket) => {
-  console.log("🔌 Admin connected:", socket.id);
+  console.log("Admin connected:", socket.id);
 });
 
 /* ================= DATABASE ================= */
 const init = async () => {
   try {
     await sequelize.authenticate();
-    console.log("✅ Database connected");
+    console.log("Database connected");
 
     await sequelize.sync();
 
@@ -88,5 +90,5 @@ init();
 const PORT = 3000;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`Server running at http://localhost:${PORT}`);
 });

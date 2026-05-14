@@ -4,7 +4,7 @@
   "description": "",
   "main": "indexs.js",
   "scripts": {
-    "start": "nodemon --exec ts-node src/indexs.ts",
+    "start": "node dist/index.js",
     "build": "tsc",
     "serve": "node dist/indexs.js",
     "dev": "ts-node-dev --respawn --transpile-only src/indexs.ts"

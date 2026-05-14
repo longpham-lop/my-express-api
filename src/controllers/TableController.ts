@@ -4,11 +4,12 @@ import Reservation from "../models/Reservation";
 
 export const createTable = async (req: Request, res: Response) => {
   try {
-    const { name, capacity } = req.body;
+    const { name, capacity,type } = req.body;
 
     const table = await Table.create({
       name,
       capacity,
+      type: type?.trim().toLowerCase() === "vip" ? "vip" : "normal",
       status: "available",
     });
 

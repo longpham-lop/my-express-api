@@ -38,25 +38,15 @@ app.use(express.static(path.join(__dirname, '../public')));
 app.get('/', (req, res) => {
   res.send('Backend akelo');
 });
-console.log("authRouter", authRouter);
-console.log("tableRouter", tableRouter);
-console.log("menuRouter", menuRouter);
-console.log("categoryRouter", categoryRouter);
-console.log("orderRouter", orderRouter);
-console.log("reservationRouter", reservationRouter);
-console.log("userRouter", userRouter);
-console.log("paymentRouter", paymentRouter);
-console.log("orderItemRouter", orderItemRouter);
-console.log("dashboardRouter", dashboardRouter);
-console.log("uploadRoutes", uploadRoutes);
-console.log("contactRouter", contactRouter);
+
+
 /* ================= ROUTES ================= */
 app.use('/api/auth', authRouter);
 app.use('/api/table', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/categories', categoryRouter);
-app.use('/api/reservations', reservationRouter); 
+// app.use('/api/reservations', reservationRouter); 
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
 app.use('/api/order-items', orderItemRouter);

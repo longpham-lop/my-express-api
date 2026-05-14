@@ -4,7 +4,7 @@ import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
 import sgMail from "../config/sendgrid"; // 
-import { io } from "../indexs";
+import { io } from "../socket";
 /* ===== TYPE USER ===== */
 interface AuthUser {
   id: number;

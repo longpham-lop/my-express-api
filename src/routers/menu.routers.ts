@@ -18,3 +18,4 @@ router.put("/:id",authMiddleware, isAdmin, updateMenuItem);    // UPDATE
 router.delete("/:id",authMiddleware, isAdmin, deleteMenuItem); // DELETE
 
 export default router;
+ 

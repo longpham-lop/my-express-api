@@ -23,6 +23,10 @@ import uploadRoutes from "./routers/upload.routers";
 import contactRouter from './routers/contact.routers';
 import Role from './models/Role';
 
+import { initSocket } from "./socket";
+
+
+
 dotenv.config();
 
 /* ================= MIDDLEWARE ================= */
@@ -46,7 +50,7 @@ app.use('/api/table', tableRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/categories', categoryRouter);
-// app.use('/api/reservations', reservationRouter); 
+app.use('/api/reservations', reservationRouter); 
 app.use('/api/users', userRouter);
 app.use('/api/payments', paymentRouter);
 app.use('/api/order-items', orderItemRouter);
@@ -57,11 +61,7 @@ app.use('/api/contact', contactRouter);
 /* ================= SOCKET ================= */
 const server = http.createServer(app);
 
-export const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
-});
+const io = initSocket(server);
 
 io.on("connection", (socket) => {
   console.log("Admin connected:", socket.id);

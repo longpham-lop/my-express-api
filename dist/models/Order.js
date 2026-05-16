@@ -9,21 +9,23 @@ const db_1 = __importDefault(require("../config/db"));
 const User_1 = __importDefault(require("./User"));
 const Reservation_1 = __importDefault(require("./Reservation"));
 // 2️⃣ Tạo class Model chuẩn
-class OrderModel extends sequelize_1.Model {
+class Order extends sequelize_1.Model {
 }
 // 3️⃣ Khởi tạo model với init
-OrderModel.init({
+Order.init({
     id: { type: sequelize_1.DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    user_id: { type: sequelize_1.DataTypes.INTEGER, allowNull: false },
+    user_id: { type: sequelize_1.DataTypes.INTEGER, allowNull: true },
     reservation_id: { type: sequelize_1.DataTypes.INTEGER, allowNull: true },
     total_price: { type: sequelize_1.DataTypes.FLOAT, allowNull: false },
     status: { type: sequelize_1.DataTypes.STRING, defaultValue: "pending" },
+    is_deleted: { type: sequelize_1.DataTypes.BOOLEAN, defaultValue: false },
 }, {
     sequelize: db_1.default,
     tableName: "orders",
     timestamps: true,
 });
 // 4️⃣ Quan hệ
-OrderModel.belongsTo(User_1.default, { foreignKey: "user_id" });
-OrderModel.belongsTo(Reservation_1.default, { foreignKey: "reservation_id" });
-exports.default = OrderModel;
+Order.belongsTo(User_1.default, { foreignKey: "user_id" });
+Order.belongsTo(Reservation_1.default, { foreignKey: "reservation_id" });
+// OrderModel.hasMany(OrderItem, {foreignKey: "order_id", as: "items",});
+exports.default = Order;

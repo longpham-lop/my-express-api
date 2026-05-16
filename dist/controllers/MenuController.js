@@ -12,111 +12,124 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MenuController = void 0;
-const MenuItem_1 = __importDefault(require("../models/MenuItem"));
+exports.deleteMenuItem = exports.updateMenuItem = exports.getMenuItemById = exports.getAllMenuItems = exports.createMenuItem = void 0;
+const Menu_1 = __importDefault(require("../models/Menu"));
 const Category_1 = __importDefault(require("../models/Category"));
-class MenuController {
-    // CREATE
-    static create(req, res) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const { name, price, categoryId, description, image } = req.body;
-                if (!name || !price || !categoryId) {
-                    return res.status(400).json({
-                        message: "name, price, categoryId are required",
-                    });
-                }
-                // check category tồn tại
-                const category = yield Category_1.default.findByPk(categoryId);
-                if (!category) {
-                    return res.status(404).json({ message: "Category not found" });
-                }
-                const item = yield MenuItem_1.default.create({
-                    name,
-                    price,
-                    categoryId,
-                    description,
-                    image,
-                });
-                return res.status(201).json({
-                    message: "Menu item created successfully",
-                    data: item,
-                });
-            }
-            catch (err) {
-                return res.status(500).json({ message: err.message });
-            }
+/* ================= CREATE ================= */
+const createMenuItem = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { name, price, category_id, description, image } = req.body;
+        if (!name || !price || !category_id) {
+            return res.status(400).json({
+                message: "name, price, category_id are required",
+            });
+        }
+        const category = yield Category_1.default.findByPk(category_id);
+        if (!category) {
+            return res.status(404).json({ message: "Category not found" });
+        }
+        console.log(req.body);
+        const item = yield Menu_1.default.create({
+            name,
+            price,
+            category_id,
+            description,
+            image,
+        });
+        return res.status(201).json({
+            message: "Menu item created successfully",
+            data: item,
         });
     }
-    // GET ALL
-    static getAll(req, res) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const items = yield MenuItem_1.default.findAll({
-                    include: [{ model: Category_1.default, attributes: ["id", "name"] }],
-                    order: [["id", "DESC"]],
-                });
-                return res.json(items);
-            }
-            catch (err) {
-                return res.status(500).json({ message: err.message });
-            }
+    catch (err) {
+        return res.status(500).json({ message: err.message });
+    }
+});
+exports.createMenuItem = createMenuItem;
+/* ================= GET ALL ================= */
+const getAllMenuItems = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const items = yield Menu_1.default.findAll({
+            where: { is_deleted: false },
+            include: [
+                {
+                    model: Category_1.default,
+                    as: "category",
+                    attributes: ["id", "name"],
+                },
+            ],
+            order: [["id", "DESC"]],
+        });
+        return res.json({
+            message: "Get all menu items success",
+            data: items,
         });
     }
-    // GET BY ID
-    static getById(req, res) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const id = Number(req.params.id);
-                const item = yield MenuItem_1.default.findByPk(id, {
-                    include: Category_1.default,
-                });
-                if (!item) {
-                    return res.status(404).json({ message: "Menu item not found" });
-                }
-                return res.json(item);
-            }
-            catch (err) {
-                return res.status(500).json({ message: err.message });
-            }
+    catch (err) {
+        return res.status(500).json({ message: err.message });
+    }
+});
+exports.getAllMenuItems = getAllMenuItems;
+/* ================= GET BY ID ================= */
+const getMenuItemById = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const id = Number(req.params.id);
+        const item = yield Menu_1.default.findByPk(id, {
+            include: [
+                {
+                    model: Category_1.default,
+                },
+            ],
+        });
+        if (!item) {
+            return res.status(404).json({ message: "Menu item not found" });
+        }
+        return res.json(item);
+    }
+    catch (err) {
+        return res.status(500).json({ message: err.message });
+    }
+});
+exports.getMenuItemById = getMenuItemById;
+/* ================= UPDATE ================= */
+const updateMenuItem = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const id = Number(req.params.id);
+        const item = yield Menu_1.default.findByPk(id);
+        if (!item) {
+            return res.status(404).json({ message: "Menu item not found" });
+        }
+        yield item.update(req.body);
+        return res.json({
+            message: "Menu item updated successfully",
+            data: item,
         });
     }
-    // UPDATE
-    static update(req, res) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const id = Number(req.params.id);
-                const item = yield MenuItem_1.default.findByPk(id);
-                if (!item) {
-                    return res.status(404).json({ message: "Menu item not found" });
-                }
-                yield item.update(req.body);
-                return res.json({
-                    message: "Menu item updated successfully",
-                    data: item,
-                });
-            }
-            catch (err) {
-                return res.status(500).json({ message: err.message });
-            }
+    catch (err) {
+        return res.status(500).json({ message: err.message });
+    }
+});
+exports.updateMenuItem = updateMenuItem;
+/* ================= DELETE ================= */
+const deleteMenuItem = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const id = Number(req.params.id);
+        const item = yield Menu_1.default.findByPk(id);
+        if (!item) {
+            return res.status(404).json({ message: "Menu item not found" });
+        }
+        yield item.update({ is_deleted: true });
+        return res.json({
+            message: "Menu item deleted successfully",
         });
     }
-    // DELETE
-    static delete(req, res) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const id = Number(req.params.id);
-                const item = yield MenuItem_1.default.findByPk(id);
-                if (!item) {
-                    return res.status(404).json({ message: "Menu item not found" });
-                }
-                yield item.destroy();
-                return res.json({ message: "Menu item deleted successfully" });
-            }
-            catch (err) {
-                return res.status(500).json({ message: err.message });
-            }
-        });
+    catch (err) {
+        if (err.name === "SequelizeForeignKeyConstraintError") {
+            return res.status(400).json({
+                message: "Không thể xóa vì món ăn đã tồn tại trong đơn hàng!",
+            });
+        }
+        return res.status(500).json({ message: err.message });
     }
-}
-exports.MenuController = MenuController;
+});
+exports.deleteMenuItem = deleteMenuItem;

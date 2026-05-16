@@ -4,10 +4,10 @@
   "description": "",
   "main": "indexs.js",
   "scripts": {
-    "start": "node dist/index.js",
+    "start": "node dist/indexs.js",
     "build": "tsc",
     "serve": "node dist/indexs.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/indexs.ts"
+    "dev": "nodemon --watch src --ext ts --exec ts-node -r tsconfig-paths/register src/indexs.ts"
   },
   "author": "",
   "license": "ISC",
@@ -25,6 +25,7 @@
     "express": "^5.2.1",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {

@@ -8,11 +8,14 @@ const router = (0, express_1.Router)();
 /**
  * USER
  */
-router.post("/", auth_middleware_1.authMiddleware, ReservationController_1.createReservation); // tạo reservation
-router.get("/", auth_middleware_1.authMiddleware, ReservationController_1.getAllReservations); // xem reservation của mình
-// router.put("/:id/cancel", authMiddleware, cancelReservation);     // hủy reservation
-/**
- * ADMIN
- */
-router.get("/admin/all", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, ReservationController_1.getAllReservationsAdmin);
+// tạo reservation
+/* ================= ADMIN ================= */
+router.get("/admin", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, ReservationController_1.getAllReservationsAdmin);
+/* ================= USER ================= */
+router.get("/", auth_middleware_1.authMiddleware, ReservationController_1.getMyReservations);
+router.post("/", ReservationController_1.createReservation);
+router.put("/:id/cancel", auth_middleware_1.authMiddleware, ReservationController_1.cancelReservation);
+router.put("/:id", auth_middleware_1.authMiddleware, ReservationController_1.updateReservation);
+router.get("/:id", auth_middleware_1.authMiddleware, ReservationController_1.getReservationById);
+router.delete("/:id", auth_middleware_1.authMiddleware, role_middleware_1.isAdmin, ReservationController_1.deleteReservation);
 exports.default = router;

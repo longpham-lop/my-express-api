@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from "dotenv";
 import cors from "cors";
 import { Server } from "socket.io";
+import { initSocket } from "./socket";
 import http from "http";
 import app from "./app";
 
@@ -23,10 +24,6 @@ import uploadRoutes from "./routers/upload.routers";
 import contactRouter from './routers/contact.routers';
 import Role from './models/Role';
 
-import { initSocket } from "./socket";
-
-
-
 dotenv.config();
 
 /* ================= MIDDLEWARE ================= */
@@ -34,12 +31,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
-  origin: [
-    "https://fe-restaurant.vercel.app",
-    "https://fe-restaurant.vercel.app/"
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true
+  origin: "http://localhost:5173",
 }));
 
 app.use(express.static(path.join(__dirname, '../public')));
@@ -47,7 +39,6 @@ app.use(express.static(path.join(__dirname, '../public')));
 app.get('/', (req, res) => {
   res.send('Backend akelo');
 });
-
 
 /* ================= ROUTES ================= */
 app.use('/api/auth', authRouter);
@@ -77,7 +68,6 @@ const init = async () => {
   try {
     await sequelize.authenticate();
     console.log("Database connected");
-
     await sequelize.sync();
 
     const roles = ["admin", "user"];
@@ -93,7 +83,7 @@ const init = async () => {
 init();
 
 /* ================= START SERVER ================= */
-const PORT = process.env.PORT || 3000;
+const PORT = 5000;
 
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);

@@ -12,8 +12,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getMyOrders = exports.deleteOrder = exports.updateOrderStatus = exports.createOrder = exports.getOrderById = exports.getAllOrders = void 0;
+exports.getMyOrders = exports.deleteOrder = exports.updateOrderStatus = exports.createOrder = exports.getOrderById = exports.getOrderDetail = exports.getAllOrders = void 0;
 const Order_1 = __importDefault(require("../models/Order"));
+const Reservation_1 = __importDefault(require("../models/Reservation"));
+const OrderItem_1 = __importDefault(require("../models/OrderItem"));
+const Menu_1 = __importDefault(require("../models/Menu"));
+const Table_1 = __importDefault(require("../models/Table"));
 /**
  * GET /api/orders
  * - ADMIN: xem tất cả orders
@@ -25,9 +29,23 @@ const getAllOrders = (req, res) => __awaiter(void 0, void 0, void 0, function* (
             return res.status(401).json({ message: "Unauthorized" });
         }
         // ADMIN
-        if (req.user.role_id === 1) {
+        if (req.user.role === "admin") {
             const orders = yield Order_1.default.findAll({
+                where: { is_deleted: false },
                 order: [["createdAt", "DESC"]],
+                include: [
+                    {
+                        model: OrderItem_1.default,
+                        as: "items",
+                        include: [
+                            {
+                                model: Menu_1.default,
+                                as: "menu",
+                                attributes: ["name", "price", "image"],
+                            },
+                        ],
+                    },
+                ],
             });
             return res.json(orders);
         }
@@ -48,6 +66,34 @@ exports.getAllOrders = getAllOrders;
  * - ADMIN: xem bất kỳ order nào
  * - USER: chỉ xem order của mình
  */
+const getOrderDetail = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const id = Number(req.params.id);
+        const order = yield Order_1.default.findByPk(id, {
+            include: [
+                {
+                    model: OrderItem_1.default,
+                    as: "items",
+                    include: [
+                        {
+                            model: Menu_1.default,
+                            as: "menu",
+                            attributes: ["name", "price", "image"],
+                        },
+                    ],
+                },
+            ],
+        });
+        if (!order) {
+            return res.status(404).json({ message: "Order not found" });
+        }
+        res.json(order);
+    }
+    catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+exports.getOrderDetail = getOrderDetail;
 const getOrderById = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         if (!req.user) {
@@ -57,18 +103,36 @@ const getOrderById = (req, res) => __awaiter(void 0, void 0, void 0, function* (
         if (isNaN(id)) {
             return res.status(400).json({ message: "ID không hợp lệ" });
         }
-        const order = yield Order_1.default.findByPk(id);
+        const order = yield Order_1.default.findByPk(id, {
+            include: [
+                {
+                    model: OrderItem_1.default,
+                    as: "items",
+                    include: [
+                        {
+                            model: Menu_1.default,
+                            as: "menu",
+                            attributes: ["name", "price", "image"],
+                        },
+                    ],
+                },
+            ],
+        });
+        // ✅ FIX 1: check null trước
         if (!order) {
             return res.status(404).json({ message: "Order không tồn tại" });
         }
-        // USER không được xem order của người khác
-        if (req.user.role_id !== 1 && order.user_id !== req.user.id) {
+        // ✅ FIX 2: sau đó mới check quyền
+        if (req.user.role !== "admin" && order.user_id !== req.user.id) {
             return res.status(403).json({ message: "Forbidden" });
         }
-        res.json(order);
+        return res.json(order);
     }
     catch (err) {
-        res.status(500).json({ error: err.message });
+        if (err instanceof Error) {
+            return res.status(500).json({ error: err.message });
+        }
+        return res.status(500).json({ error: "Unknown error" });
     }
 });
 exports.getOrderById = getOrderById;
@@ -105,7 +169,7 @@ exports.createOrder = createOrder;
  */
 const updateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.user || req.user.role_id !== 1) {
+        if (!req.user || req.user.role !== "admin") {
             return res.status(403).json({ message: "Admin only" });
         }
         const id = Number(req.params.id);
@@ -118,7 +182,27 @@ const updateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, functi
             return res.status(404).json({ message: "Order không tồn tại" });
         }
         yield order.update({ status });
-        res.json(order);
+        // ✅ update reservation theo order
+        if (order.reservation_id) {
+            const reservation = yield Reservation_1.default.findByPk(order.reservation_id);
+            if (reservation) {
+                let reservationStatus = reservation.status;
+                if (status === "processing") {
+                    reservationStatus = "confirmed";
+                }
+                if (status === "completed") {
+                    reservationStatus = "completed";
+                }
+                yield reservation.update({ status: reservationStatus });
+            }
+            if (status === "completed" && reservation) {
+                const table = yield Table_1.default.findByPk(reservation.table_id);
+                if (table) {
+                    yield table.update({ status: "available" });
+                }
+            }
+        }
+        return res.json({ message: "Cập nhật thành công", order });
     }
     catch (err) {
         res.status(500).json({ error: err.message });
@@ -131,7 +215,7 @@ exports.updateOrderStatus = updateOrderStatus;
  */
 const deleteOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.user || req.user.role_id !== 1) {
+        if (!req.user || req.user.role !== "admin") {
             return res.status(403).json({ message: "Admin only" });
         }
         const id = Number(req.params.id);
@@ -142,7 +226,7 @@ const deleteOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
         if (!order) {
             return res.status(404).json({ message: "Order không tồn tại" });
         }
-        yield order.destroy();
+        yield order.update({ is_deleted: true });
         res.json({ message: "Xóa order thành công" });
     }
     catch (err) {

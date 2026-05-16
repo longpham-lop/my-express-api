@@ -4,7 +4,7 @@ import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
 import sgMail from "../config/sendgrid"; // 
-import { io } from "../socket";
+import { getIO } from "../socket";
 /* ===== TYPE USER ===== */
 interface AuthUser {
   id: number;
@@ -77,7 +77,7 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       user_id: userId,
       status: "pending",
     });
-
+    const io = getIO();
     io.emit("new-reservation", {
       name,
       phone,

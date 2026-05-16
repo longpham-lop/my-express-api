@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // models/User.ts
 const sequelize_1 = require("sequelize");
 const db_1 = __importDefault(require("../config/db"));
-const Role_1 = __importDefault(require("./Role"));
 // 3️⃣ Class User
 class User extends sequelize_1.Model {
 }
@@ -32,15 +31,12 @@ User.init({
     },
     role_id: {
         type: sequelize_1.DataTypes.INTEGER,
-        allowNull: false,
         defaultValue: 2,
+        allowNull: false,
     },
 }, {
     sequelize: db_1.default,
     tableName: "users",
     timestamps: true,
-});
-User.belongsTo(Role_1.default, {
-    foreignKey: "role_id",
 });
 exports.default = User;

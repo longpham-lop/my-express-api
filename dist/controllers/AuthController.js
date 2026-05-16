@@ -14,28 +14,47 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.register = exports.login = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const User_1 = __importDefault(require("../models/User"));
+const models_1 = require("../models");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const login = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     try {
         const { email, password } = req.body;
-        const user = (yield User_1.default.findOne({
+        const user = (yield models_1.User.findOne({
             where: { email },
+            include: [
+                {
+                    model: models_1.Role,
+                    as: "role",
+                },
+            ],
         }));
         if (!user) {
             return res.status(400).json({ message: "Sai email hoặc mật khẩu" });
         }
-        if (user.getDataValue("password") !== password) {
+        const isMatch = yield bcrypt_1.default.compare(password, // password nhập
+        user.getDataValue("password") // password đã hash
+        );
+        if (!isMatch) {
             return res.status(400).json({ message: "Sai email hoặc mật khẩu" });
         }
+        const roleName = ((_a = user.role) === null || _a === void 0 ? void 0 : _a.name) || "user";
         const token = jsonwebtoken_1.default.sign({
             id: user.getDataValue("id"),
-            role_id: user.getDataValue("role_id"),
+            role: user.getDataValue("role_id") === 1 ? "admin" : "user",
         }, process.env.JWT_SECRET, { expiresIn: "1d" });
-        res.json({ token });
+        res.json({ token,
+            user: {
+                id: user.get("id"),
+                name: user.get("name"),
+                email: user.get("email"),
+                role: roleName,
+            },
+        });
     }
     catch (err) {
-        res.status(500).json({ error: err.message });
+        console.log("login error:", err);
+        return res.status(500).json({ error: err.message });
     }
 });
 exports.login = login;
@@ -49,7 +68,7 @@ const register = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             });
         }
         // 2️⃣ Check email tồn tại
-        const existingUser = yield User_1.default.findOne({ where: { email } });
+        const existingUser = yield models_1.User.findOne({ where: { email } });
         if (existingUser) {
             return res.status(400).json({ message: "Email đã tồn tại" });
         }
@@ -57,7 +76,7 @@ const register = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         const hashedPassword = yield bcrypt_1.default.hash(password, 10);
         // 10 = saltRounds (chuẩn)
         // 4️⃣ Tạo user
-        const user = yield User_1.default.create({
+        const user = yield models_1.User.create({
             name,
             email,
             password: hashedPassword,

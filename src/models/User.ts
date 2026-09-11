@@ -10,6 +10,7 @@ export interface UserAttributes {
   email: string;
   password: string;
   role_id: number;
+  phone?: string | null;
 }
 
 // 2️⃣ Khi create thì id là optional
@@ -25,6 +26,7 @@ class User
   public email!: string;
   public password!: string;
   public role_id!: number;
+  public phone?: string | null;
 
   // association
   public role?: Role;
@@ -58,6 +60,7 @@ User.init(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
+    phone: { type: DataTypes.STRING(30), allowNull: true, unique: true },
   },
   {
     sequelize,

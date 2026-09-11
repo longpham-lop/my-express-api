@@ -1,7 +1,6 @@
 // models/Payment.ts
 import { DataTypes, Model } from "sequelize";
 import sequelize from "../config/db";
-import Order from "./Order";
 
 // 1️⃣ Interface cho field
 export interface PaymentAttributes {
@@ -41,6 +40,5 @@ PaymentModel.init(
 );
 
 // 4️⃣ Quan hệ
-PaymentModel.belongsTo(Order, { foreignKey: "order_id" });
 
 export default PaymentModel;

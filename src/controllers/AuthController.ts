@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { User } from "../models";
+import { Role, User } from "../models";
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 
@@ -11,6 +11,7 @@ export const login = async (req: Request, res: Response) => {
     // tìm user
     const user = await User.findOne({
       where: { email },
+      include: [{ model: Role, as: "role", attributes: ["name"] }],
     });
 
     // không tồn tại
@@ -33,10 +34,7 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // lấy role thật
-    const role =
-      user.getDataValue("role_id") === 1
-        ? "admin"
-        : "user";
+    const role = user.role?.name || "user";
 
     console.log("LOGIN ROLE:", user.getDataValue("role_id"));
 
@@ -104,11 +102,16 @@ export const register = async (
     );
 
     // tạo admin
+    const defaultRole = await Role.findOne({ where: { name: "customer" } }) || await Role.findOne({ where: { name: "user" } });
+    if (!defaultRole) {
+      return res.status(500).json({ message: "Chưa khởi tạo vai trò mặc định" });
+    }
+
     const user = await User.create({
       name,
       email,
       password: hashedPassword,
-      role_id: 1,
+      role_id: defaultRole.id,
     });
 
     console.log("REGISTER ROLE:", user.get("role_id"));

@@ -4,13 +4,18 @@ import Reservation from "../models/Reservation";
 
 export const createTable = async (req: Request, res: Response) => {
   try {
-    const { name, capacity,type } = req.body;
+    const { name, capacity, type, branch_id, area_id } = req.body;
+    if (!name || !Number.isInteger(Number(capacity)) || Number(capacity) <= 0) {
+      return res.status(400).json({ message: "name và capacity hợp lệ là bắt buộc" });
+    }
 
     const table = await Table.create({
       name,
-      capacity,
+      capacity: Number(capacity),
       type: type?.trim().toLowerCase() === "vip" ? "vip" : "normal",
       status: "available",
+      branch_id: branch_id ? Number(branch_id) : undefined,
+      area_id: area_id ? Number(area_id) : null,
     });
 
     res.status(201).json(table);
@@ -21,7 +26,10 @@ export const createTable = async (req: Request, res: Response) => {
 // GET ALL TABLES
 export const getAllTable = async (req: Request, res: Response) => {
   try {
+    const branchId = req.query.branch_id ? Number(req.query.branch_id) : undefined;
+    if (req.query.branch_id && (!branchId || !Number.isInteger(branchId))) return res.status(400).json({ message: "branch_id không hợp lệ" });
     const tables = await Table.findAll({
+      where: branchId ? { branch_id: branchId } : undefined,
       order: [["id", "ASC"]],
     });
 

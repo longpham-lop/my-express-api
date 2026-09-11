@@ -3,7 +3,7 @@ import Reservation from "../models/Reservation";
 import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
-import sgMail from "../config/sendgrid"; // 
+import sgMail, { isEmailDeliveryConfigured } from "../config/sendgrid";
 import { getIO } from "../socket";
 /* ===== TYPE USER ===== */
 interface AuthUser {
@@ -110,9 +110,10 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       await OrderItem.bulkCreate(orderItems);
     }
 
+    let notificationStatus: "sent" | "skipped" | "failed" = "skipped";
     const msg = {
       to: email,
-      from: "tuanlongp70@gmail.com", 
+      from: process.env.SENDGRID_FROM_EMAIL || "",
       subject: "Xác nhận đặt bàn",
       text: `
         Xin chào ${name},
@@ -129,12 +130,23 @@ export const createReservation = async (req: AuthRequest, res: Response) => {
       `,
     };
 
-    await sgMail.send(msg);
+    if (isEmailDeliveryConfigured()) {
+      try {
+        await sgMail.send(msg);
+        notificationStatus = "sent";
+      } catch (emailError: any) {
+        // Reservation data has already been saved; email failure must not turn it into a failed reservation.
+        notificationStatus = "failed";
+        console.error("RESERVATION EMAIL FAILED:", emailError.response?.body || emailError.message);
+      }
+    } else {
+      console.warn("RESERVATION EMAIL SKIPPED: email delivery is not configured");
+    }
 
     // ✅ Response cuối
     return res.status(201).json({
       message: "Đặt bàn thành công",
-      data: { reservation, order },
+      data: { reservation, order, notificationStatus },
     });
 
   } catch (err: any) {

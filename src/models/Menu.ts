@@ -4,6 +4,7 @@ import sequelize from "../config/db";
 
 export interface MenuItemAttributes {
   id?: number;
+  branch_id?: number | null;
   name: string;
   price: number;
   category_id: number;
@@ -17,6 +18,7 @@ export interface MenuItemAttributes {
 
 class Menu extends Model<MenuItemAttributes> implements MenuItemAttributes {
   public id!: number;
+  public branch_id?: number | null;
   public name!: string;
   public price!: number;
   public category_id!: number;
@@ -33,6 +35,7 @@ class Menu extends Model<MenuItemAttributes> implements MenuItemAttributes {
 Menu.init(
   {
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    branch_id: { type: DataTypes.INTEGER, allowNull: true },
     name: { type: DataTypes.STRING, allowNull: false },
     price: { type: DataTypes.FLOAT, allowNull: false },
     category_id: { type: DataTypes.INTEGER, allowNull: false, field: "category_id" },

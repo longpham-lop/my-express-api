@@ -5,6 +5,8 @@ import sequelize from "../config/db";
 // 1️⃣ Interface
 export interface TableAttributes {
   id?: number;
+  branch_id?: number;
+  area_id?: number | null;
   name: string;
   capacity: number;
   status?: string;
@@ -14,6 +16,8 @@ export interface TableAttributes {
 // 2️⃣ Model class
 class TableModel extends Model<TableAttributes> implements TableAttributes {
   public id!: number;
+  public branch_id?: number;
+  public area_id?: number | null;
   public name!: string;
   public capacity!: number;
   public status!: string;
@@ -31,6 +35,8 @@ TableModel.init(
       primaryKey: true,
       autoIncrement: true,
     },
+    branch_id: { type: DataTypes.INTEGER, allowNull: true },
+    area_id: { type: DataTypes.INTEGER, allowNull: true },
 
     name: {
       type: DataTypes.STRING,
@@ -56,6 +62,7 @@ TableModel.init(
     sequelize,
     tableName: "tables",
     timestamps: true,
+    indexes: [{ unique: true, fields: ["branch_id", "name"] }],
   }
 );
 

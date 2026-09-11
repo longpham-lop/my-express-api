@@ -22,6 +22,7 @@ import orderItemRouter from './routers/orderItem.routers';
 import dashboardRouter from './routers/dashboard.routers';
 import uploadRoutes from "./routers/upload.routers";
 import contactRouter from './routers/contact.routers';
+import branchRouter from './routers/branch.routers';
 import Role from './models/Role';
 
 dotenv.config();
@@ -53,6 +54,7 @@ app.use('/api/order-items', orderItemRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api', uploadRoutes);
 app.use('/api/contact', contactRouter);
+app.use('/api/branches', branchRouter);
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);
@@ -70,7 +72,7 @@ const init = async () => {
     console.log("Database connected");
     await sequelize.sync();
 
-    const roles = ["admin", "user"];
+    const roles = ["admin", "user", "chain_manager", "branch_manager", "waiter", "kitchen", "cashier", "customer"];
     for (const name of roles) {
       await Role.findOrCreate({ where: { name } });
     }

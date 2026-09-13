@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -17,7 +50,8 @@ const Reservation_1 = __importDefault(require("../models/Reservation"));
 const Table_1 = __importDefault(require("../models/Table"));
 const Order_1 = __importDefault(require("../models/Order"));
 const OrderItem_1 = __importDefault(require("../models/OrderItem"));
-const sendgrid_1 = __importDefault(require("../config/sendgrid")); // 
+const Branch_1 = __importDefault(require("../models/Branch"));
+const sendgrid_1 = __importStar(require("../config/sendgrid"));
 const socket_1 = require("../socket");
 const branchMap = {
     "1": "Nhà hàng Vị Nhà 86 Ngọc Khánh",
@@ -27,7 +61,7 @@ const branchMap = {
 };
 /* ================= CREATE ================= */
 const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b;
     try {
         const { table_id, reservation_time, name, phone, email, // ✅ FIX
         branch, note, cart, guest_count, } = req.body;
@@ -68,7 +102,8 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
             user_id: userId,
             status: "pending",
         });
-        socket_1.io.emit("new-reservation", {
+        const io = (0, socket_1.getIO)();
+        io.emit("new-reservation", {
             name,
             phone,
             time: reservation_time,
@@ -91,9 +126,10 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
             }));
             yield OrderItem_1.default.bulkCreate(orderItems);
         }
+        let notificationStatus = "skipped";
         const msg = {
             to: email,
-            from: "tuanlongp70@gmail.com",
+            from: process.env.SENDGRID_FROM_EMAIL || "",
             subject: "Xác nhận đặt bàn",
             text: `
         Xin chào ${name},
@@ -109,11 +145,24 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
         Khi đến nhà hàng, hãy báo tên hoặc số điện thoại cho lễ tân. Cảm ơn bạn!
       `,
         };
-        yield sendgrid_1.default.send(msg);
+        if ((0, sendgrid_1.isEmailDeliveryConfigured)()) {
+            try {
+                yield sendgrid_1.default.send(msg);
+                notificationStatus = "sent";
+            }
+            catch (emailError) {
+                // Reservation data has already been saved; email failure must not turn it into a failed reservation.
+                notificationStatus = "failed";
+                console.error("RESERVATION EMAIL FAILED:", ((_b = emailError.response) === null || _b === void 0 ? void 0 : _b.body) || emailError.message);
+            }
+        }
+        else {
+            console.warn("RESERVATION EMAIL SKIPPED: email delivery is not configured");
+        }
         // ✅ Response cuối
         return res.status(201).json({
             message: "Đặt bàn thành công",
-            data: { reservation, order },
+            data: { reservation, order, notificationStatus },
         });
     }
     catch (err) {
@@ -153,6 +202,11 @@ const getAllReservationsAdmin = (req, res) => __awaiter(void 0, void 0, void 0, 
                 {
                     model: Table_1.default,
                     attributes: ["id", "name", "capacity"],
+                },
+                {
+                    model: Branch_1.default,
+                    as: "restaurantBranch",
+                    attributes: ["id", "name", "code"],
                 },
             ],
             order: [["reservation_time", "DESC"]],

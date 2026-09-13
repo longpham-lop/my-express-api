@@ -17,12 +17,17 @@ const Table_1 = __importDefault(require("../models/Table"));
 const Reservation_1 = __importDefault(require("../models/Reservation"));
 const createTable = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { name, capacity, type } = req.body;
+        const { name, capacity, type, branch_id, area_id } = req.body;
+        if (!name || !Number.isInteger(Number(capacity)) || Number(capacity) <= 0) {
+            return res.status(400).json({ message: "name và capacity hợp lệ là bắt buộc" });
+        }
         const table = yield Table_1.default.create({
             name,
-            capacity,
+            capacity: Number(capacity),
             type: (type === null || type === void 0 ? void 0 : type.trim().toLowerCase()) === "vip" ? "vip" : "normal",
             status: "available",
+            branch_id: branch_id ? Number(branch_id) : undefined,
+            area_id: area_id ? Number(area_id) : null,
         });
         res.status(201).json(table);
     }
@@ -34,7 +39,11 @@ exports.createTable = createTable;
 // GET ALL TABLES
 const getAllTable = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        const branchId = req.query.branch_id ? Number(req.query.branch_id) : undefined;
+        if (req.query.branch_id && (!branchId || !Number.isInteger(branchId)))
+            return res.status(400).json({ message: "branch_id không hợp lệ" });
         const tables = yield Table_1.default.findAll({
+            where: branchId ? { branch_id: branchId } : undefined,
             order: [["id", "ASC"]],
         });
         res.json(tables);

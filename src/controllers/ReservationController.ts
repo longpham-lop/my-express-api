@@ -3,6 +3,7 @@ import Reservation from "../models/Reservation";
 import TableModel from "../models/Table";
 import Order from "../models/Order";
 import OrderItem from "../models/OrderItem";
+import Branch from "../models/Branch";
 import sgMail, { isEmailDeliveryConfigured } from "../config/sendgrid";
 import { getIO } from "../socket";
 /* ===== TYPE USER ===== */
@@ -192,6 +193,11 @@ export const getAllReservationsAdmin = async (
         {
           model: TableModel,
           attributes: ["id", "name", "capacity"],
+        },
+        {
+          model: Branch,
+          as: "restaurantBranch",
+          attributes: ["id", "name", "code"],
         },
       ],
       order: [["reservation_time", "DESC"]],

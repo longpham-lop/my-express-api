@@ -5,6 +5,8 @@ import sequelize from "../config/db";
 export interface ReservationAttributes {
   id: number;
   branch_id?: number | null;
+  customer_id?: number | null;
+  reservation_code?: string | null;
   user_id?: number;
   table_id: number;
   reservation_time: Date;
@@ -29,6 +31,8 @@ class Reservation
 {
   public id!: number;
   public branch_id?: number | null;
+  public customer_id?: number | null;
+  public reservation_code?: string | null;
   public user_id?: number;
   public table_id!: number;
   public reservation_time!: Date;
@@ -47,6 +51,8 @@ Reservation.init(
   {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     branch_id: { type: DataTypes.INTEGER, allowNull: true },
+    customer_id: { type: DataTypes.INTEGER, allowNull: true },
+    reservation_code: { type: DataTypes.STRING(24), allowNull: true, unique: true },
     user_id: { type: DataTypes.INTEGER, allowNull: true },
     table_id: { type: DataTypes.INTEGER, allowNull: false },
     reservation_time: { type: DataTypes.DATE, allowNull: false },

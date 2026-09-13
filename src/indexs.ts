@@ -23,6 +23,7 @@ import dashboardRouter from './routers/dashboard.routers';
 import uploadRoutes from "./routers/upload.routers";
 import contactRouter from './routers/contact.routers';
 import branchRouter from './routers/branch.routers';
+import roleRouter from './routers/role.routers';
 import Role from './models/Role';
 
 dotenv.config();
@@ -32,7 +33,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
-  origin: "http://localhost:5173",
+  origin: ["http://localhost:5173", "http://localhost:5174"],
 }));
 
 app.use(express.static(path.join(__dirname, '../public')));
@@ -55,6 +56,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api', uploadRoutes);
 app.use('/api/contact', contactRouter);
 app.use('/api/branches', branchRouter);
+app.use('/api/roles', roleRouter);
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);

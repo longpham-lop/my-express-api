@@ -16,6 +16,8 @@ TableModel.init({
         primaryKey: true,
         autoIncrement: true,
     },
+    branch_id: { type: sequelize_1.DataTypes.INTEGER, allowNull: true },
+    area_id: { type: sequelize_1.DataTypes.INTEGER, allowNull: true },
     name: {
         type: sequelize_1.DataTypes.STRING,
         allowNull: false,
@@ -37,5 +39,6 @@ TableModel.init({
     sequelize: db_1.default,
     tableName: "tables",
     timestamps: true,
+    indexes: [{ unique: true, fields: ["branch_id", "name"] }],
 });
 exports.default = TableModel;

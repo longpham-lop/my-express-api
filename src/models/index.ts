@@ -12,9 +12,12 @@ import Branch from "./Branch";
 import BranchSetting from "./BranchSetting";
 import TableArea from "./TableArea";
 import StaffBranch from "./StaffBranch";
+import Customer from "./Customer";
+import OtpRequest from "./OtpRequest";
 
 Role.hasMany(User, { foreignKey: "role_id", as: "users" });
 User.belongsTo(Role, { foreignKey: "role_id", as: "role" });
+User.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 
 Branch.hasOne(BranchSetting, { foreignKey: "branch_id", as: "settings", onDelete: "CASCADE" });
 BranchSetting.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
@@ -31,6 +34,8 @@ Category.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 Branch.hasMany(Reservation, { foreignKey: "branch_id", as: "reservations" });
 // Reservation cũ đã có cột `branch` dạng text; dùng alias khác để không va chạm.
 Reservation.belongsTo(Branch, { foreignKey: "branch_id", as: "restaurantBranch" });
+Customer.hasMany(Reservation, { foreignKey: "customer_id", as: "reservations" });
+Reservation.belongsTo(Customer, { foreignKey: "customer_id", as: "customer" });
 Branch.hasMany(Order, { foreignKey: "branch_id", as: "orders" });
 Order.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 User.belongsToMany(Branch, { through: StaffBranch, foreignKey: "user_id", as: "branches" });
@@ -49,4 +54,4 @@ Order.belongsTo(User, { foreignKey: "user_id" });
 Order.belongsTo(Reservation, { foreignKey: "reservation_id" });
 Payment.belongsTo(Order, { foreignKey: "order_id" });
 
-export { sequelize, User, Role, Menu, Category, Order, OrderItem, Table, Reservation, Payment, Branch, BranchSetting, TableArea, StaffBranch };
+export { sequelize, User, Role, Menu, Category, Order, OrderItem, Table, Reservation, Payment, Branch, BranchSetting, TableArea, StaffBranch, Customer, OtpRequest };

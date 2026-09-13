@@ -8,6 +8,7 @@
     "build": "tsc",
     "serve": "node dist/indexs.js",
     "dev": "nodemon --watch src --ext ts --exec ts-node -r tsconfig-paths/register src/indexs.ts"
+    ,"backfill:single-branch": "ts-node -r tsconfig-paths/register src/scripts/backfill-single-branch.ts"
   },
   "author": "",
   "license": "ISC",

@@ -11,8 +11,16 @@ import {
 
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { isAdmin } from "../middlewares/role.middleware";
+import { requireBranchManager } from "../middlewares/permission.middleware";
+import { checkAvailability, createOnlineReservation, createPhoneReservation, requestReservationOtp } from "../controllers/ReservationPhase2Controller";
 
 const router = Router();
+
+// Public reservation flow: availability -> OTP -> booking confirmation.
+router.post("/availability", checkAvailability);
+router.post("/otp/request", requestReservationOtp);
+router.post("/online", createOnlineReservation);
+router.post("/phone", authMiddleware, requireBranchManager, createPhoneReservation);
 
 /**
  * USER

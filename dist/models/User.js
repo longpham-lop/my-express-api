@@ -31,8 +31,20 @@ User.init({
     },
     role_id: {
         type: sequelize_1.DataTypes.INTEGER,
-        defaultValue: 2,
         allowNull: false,
+    },
+    phone: { type: sequelize_1.DataTypes.STRING(30),
+        allowNull: true,
+        unique: true
+    },
+    branch_id: {
+        type: sequelize_1.DataTypes.INTEGER,
+        allowNull: true,
+    },
+    status: {
+        type: sequelize_1.DataTypes.ENUM("active", "inactive"),
+        allowNull: false,
+        defaultValue: "active",
     },
 }, {
     sequelize: db_1.default,

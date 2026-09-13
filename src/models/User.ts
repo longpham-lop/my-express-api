@@ -11,10 +11,12 @@ export interface UserAttributes {
   password: string;
   role_id: number;
   phone?: string | null;
+  branch_id?: number | null;
+  status: "active" | "inactive";
 }
 
-// 2️⃣ Khi create thì id là optional
-type UserCreationAttributes = Optional<UserAttributes, "id">;
+// 2️⃣ Khi create thì id và status là optional vì status có defaultValue
+type UserCreationAttributes = Optional<UserAttributes, "id" | "status">;
 
 // 3️⃣ Class User
 class User
@@ -27,6 +29,8 @@ class User
   public password!: string;
   public role_id!: number;
   public phone?: string | null;
+  public branch_id?: number | null;
+  public status!: "active" | "inactive";
 
   // association
   public role?: Role;
@@ -60,7 +64,19 @@ User.init(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
-    phone: { type: DataTypes.STRING(30), allowNull: true, unique: true },
+    phone: { type: DataTypes.STRING(30), 
+      allowNull: true, 
+      unique: true 
+    },
+    branch_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.ENUM("active", "inactive"),
+      allowNull: false,
+      defaultValue: "active",
+    },
   },
   {
     sequelize,

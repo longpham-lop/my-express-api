@@ -1,73 +1,160 @@
-import { Request, Response } from "express";
-import { fn, col, literal } from "sequelize";
+import { Response } from "express";
+import { fn, col, literal, Op, WhereOptions } from "sequelize";
 
 import Menu from "../models/Menu";
 import Order from "../models/Order";
 import Table from "../models/Table";
 import Reservation from "../models/Reservation";
 import OrderItem from "../models/OrderItem";
+import { AuthRequest } from "../middlewares/auth.middleware";
 
-export const getDashboard = async (req: Request, res: Response) => {
+interface BookingRow {
+  day: string;
+  bookings: string | number;
+}
+
+interface TopDishRow {
+  menu_item_id: number;
+  totalSold: string | number;
+}
+
+export const getDashboard = async (
+  req: AuthRequest,
+  res: Response
+) => {
   try {
-    /* ===== CARD STATS ===== */
-    const [menuCount, orderCount, tableAvailable, pendingOrders] =
-      await Promise.all([
-        Menu.count(),
+    const user = req.user;
 
-        Order.count(),
+    if (!user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
 
-        Table.count({
-          where: {
-            status: "available",
-          },
-        }),
+    const isBranchManager = user.role === "branch_manager";
 
-        Order.count({
-          where: {
-            status: "pending",
-          },
-        }),
-      ]);
+    if (isBranchManager && !user.branchId) {
+      return res.status(403).json({
+        message: "Tài khoản chưa được gán chi nhánh",
+      });
+    }
 
-    /* ===== TABLE STATUS ===== */
-    const [availableTables, reservedTables, occupiedTables] =
-      await Promise.all([
-        Table.count({
-          where: {
-            status: "available",
-          },
-        }),
+    const branchId = user.branchId;
 
-        Table.count({
-          where: {
-            status: "reserved",
-          },
-        }),
+    /*
+     * =====================================================
+     * FILTER THEO CHI NHÁNH
+     * =====================================================
+     */
 
-        Table.count({
-          where: {
-            status: "occupied",
-          },
-        }),
-      ]);
+    const menuWhere: WhereOptions =
+      isBranchManager
+        ? { branch_id: branchId }
+        : {};
 
-    /* ===== BOOKING BY DAY ===== */
-    const bookingRows = await Reservation.findAll({
+    const orderWhere: WhereOptions =
+      isBranchManager
+        ? { branch_id: branchId }
+        : {};
+
+    const tableWhere: WhereOptions =
+      isBranchManager
+        ? { branch_id: branchId }
+        : {};
+
+    const reservationWhere: WhereOptions =
+      isBranchManager
+        ? { branch_id: branchId }
+        : {};
+
+    /* =====================================================
+     * CARD STATS
+     * ===================================================== */
+
+    const [
+      menuCount,
+      orderCount,
+      tableAvailable,
+      pendingOrders,
+    ] = await Promise.all([
+      Menu.count({
+        where: menuWhere,
+      }),
+
+      Order.count({
+        where: orderWhere,
+      }),
+
+      Table.count({
+        where: {
+          ...tableWhere,
+          status: "available",
+        },
+      }),
+
+      Order.count({
+        where: {
+          ...orderWhere,
+          status: "pending",
+        },
+      }),
+    ]);
+
+    /* =====================================================
+     * TABLE STATUS
+     * ===================================================== */
+
+    const [
+      availableTables,
+      reservedTables,
+      occupiedTables,
+    ] = await Promise.all([
+      Table.count({
+        where: {
+          ...tableWhere,
+          status: "available",
+        },
+      }),
+
+      Table.count({
+        where: {
+          ...tableWhere,
+          status: "reserved",
+        },
+      }),
+
+      Table.count({
+        where: {
+          ...tableWhere,
+          status: "occupied",
+        },
+      }),
+    ]);
+
+    /* =====================================================
+     * BOOKING BY DAY
+     * ===================================================== */
+
+    const bookingRows = (await Reservation.findAll({
       attributes: [
         [fn("DATE", col("reservation_time")), "day"],
         [fn("COUNT", col("id")), "bookings"],
       ],
+      where: reservationWhere,
       group: [fn("DATE", col("reservation_time"))],
       order: [[literal("day"), "ASC"]],
       raw: true,
-    });
+    })) as unknown as BookingRow[];
 
-    const bookingByDay = bookingRows.map((row: any) => ({
+    const bookingByDay = bookingRows.map((row) => ({
       day: row.day,
       bookings: Number(row.bookings),
     }));
 
-    /* ===== RECENT ORDERS ===== */
+    /* =====================================================
+     * RECENT ORDERS
+     * ===================================================== */
+
     const recentOrders = await Order.findAll({
       attributes: [
         "id",
@@ -75,25 +162,68 @@ export const getDashboard = async (req: Request, res: Response) => {
         "total_price",
         "createdAt",
       ],
+      where: orderWhere,
       order: [["createdAt", "DESC"]],
       limit: 5,
       raw: true,
     });
-    /* ===== TOP MÓN ĐƯỢC GỌI NHIỀU ===== */
 
-    const topDishRows = await OrderItem.findAll({
-      attributes: [
-        "menu_item_id",
-        [fn("SUM", col("quantity")), "totalSold"],
-      ],
-      group: ["menu_item_id"],
-      order: [[fn("SUM", col("quantity")), "DESC"]],
-      limit: 5,
-      raw: true,
-    });
+    /* =====================================================
+     * TOP MÓN
+     * ===================================================== */
+
+    let topDishRows: TopDishRow[] = [];
+
+    if (isBranchManager) {
+      /*
+       * Lấy các order thuộc chi nhánh của branch_manager
+       */
+      const branchOrders = await Order.findAll({
+        attributes: ["id"],
+        where: {
+          branch_id: branchId,
+        },
+        raw: true,
+      });
+
+      const orderIds = branchOrders.map((order) => order.id);
+
+      if (orderIds.length > 0) {
+        topDishRows = (await OrderItem.findAll({
+          attributes: [
+            "menu_item_id",
+            [fn("SUM", col("quantity")), "totalSold"],
+          ],
+          where: {
+            order_id: {
+              [Op.in]: orderIds,
+            },
+          },
+          group: ["menu_item_id"],
+          order: [[fn("SUM", col("quantity")), "DESC"]],
+          limit: 5,
+          raw: true,
+        })) as unknown as TopDishRow[];
+      }
+    } else {
+      /*
+       * Admin / chain_manager:
+       * xem top món toàn hệ thống
+       */
+      topDishRows = (await OrderItem.findAll({
+        attributes: [
+          "menu_item_id",
+          [fn("SUM", col("quantity")), "totalSold"],
+        ],
+        group: ["menu_item_id"],
+        order: [[fn("SUM", col("quantity")), "DESC"]],
+        limit: 5,
+        raw: true,
+      })) as unknown as TopDishRow[];
+    }
 
     const topDishes = await Promise.all(
-      topDishRows.map(async (item: any) => {
+      topDishRows.map(async (item) => {
         const menu = await Menu.findByPk(item.menu_item_id);
 
         return {
@@ -102,8 +232,12 @@ export const getDashboard = async (req: Request, res: Response) => {
         };
       })
     );
-    /* ===== RESPONSE ===== */
-    res.json({
+
+    /* =====================================================
+     * RESPONSE
+     * ===================================================== */
+
+    return res.json({
       menu: menuCount,
       orders: orderCount,
       tables: tableAvailable,
@@ -129,12 +263,17 @@ export const getDashboard = async (req: Request, res: Response) => {
       topDishes,
       recentOrders,
     });
-  } catch (err: any) {
-    console.log("Dashboard Error:", err);
+  } catch (err: unknown) {
+    console.error("Dashboard Error:", err);
 
-    res.status(500).json({
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Unknown error";
+
+    return res.status(500).json({
       message: "Lỗi server dashboard",
-      error: err.message,
+      error: message,
     });
   }
 };

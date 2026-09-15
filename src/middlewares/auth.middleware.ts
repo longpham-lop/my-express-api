@@ -1,13 +1,18 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-// import User from "../models/User";
-// import Role from "../models/Role";
 
 export interface AuthRequest extends Request {
   user?: {
     id: number;
-    role?: string;
+    role: string;
+    branchId: number | null;
   };
+}
+
+interface JwtPayload {
+  id: number;
+  role: string;
+  branchId: number | null;
 }
 
 export const authMiddleware = async (
@@ -16,27 +21,52 @@ export const authMiddleware = async (
   next: NextFunction
 ) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    // 1. Lấy Authorization header
+    const authorization = req.headers.authorization;
 
-    if (!token) {
-      return res.status(401).json({ message: "No token" });
+    if (!authorization) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
     }
 
+    // 2. Kiểm tra Bearer token
+    const parts = authorization.split(" ");
+
+    if (parts.length !== 2 || parts[0] !== "Bearer") {
+      return res.status(401).json({
+        message: "Token không hợp lệ",
+      });
+    }
+
+    const token = parts[1];
+
+    // 3. Verify JWT
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET!
-    ) as { id: number; role: string };
+    ) as JwtPayload;
 
-    console.log("DECODED:", decoded);
+    console.log("========== JWT ==========");
+    console.log("User ID:", decoded.id);
+    console.log("Role:", decoded.role);
+    console.log("Branch ID:", decoded.branchId);
+    console.log("=========================");
 
+    // 4. Lưu thông tin user vào request
     req.user = {
       id: decoded.id,
       role: decoded.role,
+      branchId: decoded.branchId ?? null,
     };
 
+    // 5. Cho request đi tiếp
     next();
   } catch (err) {
     console.log("JWT ERROR:", err);
-    return res.status(401).json({ message: "Invalid token" });
+
+    return res.status(401).json({
+      message: "Token không hợp lệ hoặc đã hết hạn",
+    });
   }
 };

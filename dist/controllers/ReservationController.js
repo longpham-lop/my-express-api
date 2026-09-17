@@ -53,33 +53,82 @@ const OrderItem_1 = __importDefault(require("../models/OrderItem"));
 const Branch_1 = __importDefault(require("../models/Branch"));
 const sendgrid_1 = __importStar(require("../config/sendgrid"));
 const socket_1 = require("../socket");
+/* =========================================================
+   BRANCH MAP
+========================================================= */
 const branchMap = {
     "1": "Nhà hàng Vị Nhà 86 Ngọc Khánh",
     "2": "Nhà hàng Vị Nhà 67A Phó Đức Chính",
     "3": "Nhà hàng Vị Nhà 10 Khúc Thừa Dụ",
-    "4": "Nhà hàng Vị Nhà 19 Nguyễn Văn Huyên"
+    "4": "Nhà hàng Vị Nhà 19 Nguyễn Văn Huyên",
 };
-/* ================= CREATE ================= */
+/* =========================================================
+   HELPER
+========================================================= */
+const isManagementRole = (role) => {
+    return ["admin", "chain_manager", "branch_manager"].includes(role);
+};
+/**
+ * Kiểm tra user quản lý có được phép thao tác
+ * trên reservation thuộc branch này hay không.
+ */
+const canManageReservation = (user, reservationBranchId) => {
+    // Admin và chain_manager quản lý toàn hệ thống
+    if (user.role === "admin" || user.role === "chain_manager") {
+        return true;
+    }
+    // Branch manager chỉ được branch của mình
+    if (user.role === "branch_manager") {
+        return (user.branchId !== null &&
+            reservationBranchId === user.branchId);
+    }
+    return false;
+};
+/* =========================================================
+   CREATE RESERVATION
+========================================================= */
 const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+    var _a;
     try {
-        const { table_id, reservation_time, name, phone, email, // ✅ FIX
-        branch, note, cart, guest_count, } = req.body;
-        // ✅ Validate
-        if (!table_id || !reservation_time || !name || !phone || !email) {
-            return res.status(400).json({ message: "Thiếu dữ liệu" });
+        const { table_id, reservation_time, name, phone, email, branch, note, cart, guest_count, } = req.body;
+        /* ================= VALIDATE ================= */
+        if (!table_id ||
+            !reservation_time ||
+            !name ||
+            !phone ||
+            !email) {
+            return res.status(400).json({
+                message: "Thiếu dữ liệu",
+            });
         }
-        // ✅ Check bàn
+        const reservationDateTime = new Date(reservation_time);
+        if (Number.isNaN(reservationDateTime.getTime())) {
+            return res.status(400).json({
+                message: "Thời gian đặt bàn không hợp lệ",
+            });
+        }
+        /* ================= CHECK TABLE ================= */
         const table = yield Table_1.default.findByPk(table_id);
         if (!table) {
-            return res.status(404).json({ message: "Table không tồn tại" });
+            return res.status(404).json({
+                message: "Table không tồn tại",
+            });
         }
-        const branchName = branchMap[branch] || "Không xác định";
-        // ✅ Check trùng
+        if (!table.branch_id) {
+            return res.status(400).json({
+                message: "Bàn chưa được gán chi nhánh",
+            });
+        }
+        /* ================= CHECK BRANCH ================= */
+        const branchId = table.branch_id;
+        const branchName = branchMap[String(branchId)] ||
+            branchMap[String(branch !== null && branch !== void 0 ? branch : "")] ||
+            "Không xác định";
+        /* ================= CHECK DUPLICATE ================= */
         const existing = yield Reservation_1.default.findOne({
             where: {
                 table_id,
-                reservation_time,
+                reservation_time: reservationDateTime,
                 status: "pending",
             },
         });
@@ -88,31 +137,36 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 message: "Bàn đã được đặt thời gian này",
             });
         }
+        /* ================= USER ================= */
         const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-        // ✅ Tạo reservation
+        /* ================= CREATE RESERVATION ================= */
         const reservation = yield Reservation_1.default.create({
+            branch_id: branchId,
             table_id,
-            reservation_time,
+            reservation_time: reservationDateTime,
             customer_name: name,
             phone,
             email,
-            branch,
+            branch: String(branchId),
             note,
-            guest_count,
+            guest_count: guest_count !== null && guest_count !== void 0 ? guest_count : 1,
             user_id: userId,
             status: "pending",
         });
+        /* ================= SOCKET ================= */
         const io = (0, socket_1.getIO)();
         io.emit("new-reservation", {
             name,
             phone,
             time: reservation_time,
+            branchId,
         });
+        /* ================= CREATE ORDER ================= */
         let order = null;
-        // ✅ Tạo order nếu có cart
         if (Array.isArray(cart) && cart.length > 0) {
-            const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+            const total = cart.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
             order = yield Order_1.default.create({
+                branch_id: branchId,
                 reservation_id: reservation.id,
                 user_id: userId !== null && userId !== void 0 ? userId : undefined,
                 total_price: total,
@@ -121,28 +175,34 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
             const orderItems = cart.map((item) => ({
                 order_id: order.id,
                 menu_item_id: Number(item.id),
-                quantity: item.quantity,
-                unit_price: item.price,
+                quantity: Number(item.quantity),
+                unit_price: Number(item.price),
             }));
             yield OrderItem_1.default.bulkCreate(orderItems);
         }
+        /* ================= SEND EMAIL ================= */
         let notificationStatus = "skipped";
+        const dateTimeParts = reservation_time.split(" ");
+        const reservationDate = dateTimeParts[0] || reservation_time;
+        const reservationTime = dateTimeParts[1] || "";
         const msg = {
             to: email,
             from: process.env.SENDGRID_FROM_EMAIL || "",
             subject: "Xác nhận đặt bàn",
             text: `
-        Xin chào ${name},
+Xin chào ${name},
 
-        Bạn đã đặt bàn thành công!
+Bạn đã đặt bàn thành công!
 
-        📍 Cơ sở: ${branchName}
-        ⏰ Thời gian: ${reservation_time}
-        📞 SĐT: ${phone}
-        📅 Ngày: ${reservation_time.split(" ")[0]}
-        ⏰ Giờ: ${reservation_time.split(" ")[1]}
+📍 Cơ sở: ${branchName}
+⏰ Thời gian: ${reservation_time}
+📞 SĐT: ${phone}
+📅 Ngày: ${reservationDate}
+⏰ Giờ: ${reservationTime}
 
-        Khi đến nhà hàng, hãy báo tên hoặc số điện thoại cho lễ tân. Cảm ơn bạn!
+Khi đến nhà hàng, hãy báo tên hoặc số điện thoại cho lễ tân.
+
+Cảm ơn bạn!
       `,
         };
         if ((0, sendgrid_1.isEmailDeliveryConfigured)()) {
@@ -151,79 +211,145 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 notificationStatus = "sent";
             }
             catch (emailError) {
-                // Reservation data has already been saved; email failure must not turn it into a failed reservation.
                 notificationStatus = "failed";
-                console.error("RESERVATION EMAIL FAILED:", ((_b = emailError.response) === null || _b === void 0 ? void 0 : _b.body) || emailError.message);
+                const message = emailError instanceof Error
+                    ? emailError.message
+                    : "Unknown email error";
+                console.error("RESERVATION EMAIL FAILED:", message);
             }
         }
         else {
             console.warn("RESERVATION EMAIL SKIPPED: email delivery is not configured");
         }
-        // ✅ Response cuối
+        /* ================= RESPONSE ================= */
         return res.status(201).json({
             message: "Đặt bàn thành công",
-            data: { reservation, order, notificationStatus },
+            data: {
+                reservation,
+                order,
+                notificationStatus,
+            },
         });
     }
     catch (err) {
         console.error("CREATE RESERVATION ERROR:", err);
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
         return res.status(500).json({
             message: "Lỗi server",
-            error: err.message,
+            error: message,
         });
     }
 });
 exports.createReservation = createReservation;
-/* ================= USER: GET MY ================= */
+/* =========================================================
+   USER: GET MY RESERVATIONS
+========================================================= */
 const getMyReservations = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         if (!req.user) {
-            return res.status(401).json({ message: "Unauthorized" });
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
         }
         const data = yield Reservation_1.default.findAll({
-            where: { user_id: req.user.id },
+            where: {
+                user_id: req.user.id,
+            },
             order: [["reservation_time", "DESC"]],
         });
-        res.json(data);
+        return res.json(data);
     }
     catch (err) {
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.getMyReservations = getMyReservations;
-/* ================= ADMIN: GET ALL ================= */
+/* =========================================================
+   ADMIN / MANAGER: GET ALL RESERVATIONS
+========================================================= */
 const getAllReservationsAdmin = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.user || req.user.role !== "admin") {
-            return res.status(403).json({ message: "Admin only" });
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
         }
+        const { role, branchId } = req.user;
+        /* ================= CHECK ROLE ================= */
+        if (!isManagementRole(role)) {
+            return res.status(403).json({
+                message: "Bạn không có quyền xem danh sách đặt bàn",
+            });
+        }
+        /* ================= BRANCH MANAGER ================= */
+        if (role === "branch_manager" && !branchId) {
+            return res.status(403).json({
+                message: "Tài khoản chưa được gán chi nhánh",
+            });
+        }
+        /* ================= WHERE ================= */
+        const where = {};
+        if (role === "branch_manager") {
+            where.branch_id = branchId;
+        }
+        /* ================= QUERY ================= */
         const data = yield Reservation_1.default.findAll({
+            where,
             include: [
                 {
                     model: Table_1.default,
-                    attributes: ["id", "name", "capacity"],
+                    attributes: [
+                        "id",
+                        "name",
+                        "capacity",
+                    ],
                 },
                 {
                     model: Branch_1.default,
                     as: "restaurantBranch",
-                    attributes: ["id", "name", "code"],
+                    attributes: [
+                        "id",
+                        "name",
+                        "code",
+                    ],
                 },
             ],
             order: [["reservation_time", "DESC"]],
         });
-        res.json(data);
+        return res.json(data);
     }
     catch (err) {
         console.error("GET ADMIN RESERVATION ERROR:", err);
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.getAllReservationsAdmin = getAllReservationsAdmin;
-/* ================= GET BY ID ================= */
+/* =========================================================
+   GET RESERVATION BY ID
+========================================================= */
 const getReservationById = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
+        }
         const id = Number(req.params.id);
-        if (!id || isNaN(id)) {
+        if (!id || Number.isNaN(id)) {
             return res.status(400).json({
                 message: "ID không hợp lệ",
             });
@@ -234,24 +360,48 @@ const getReservationById = (req, res) => __awaiter(void 0, void 0, void 0, funct
                 message: "Reservation không tồn tại",
             });
         }
-        // user chỉ xem của mình
-        if (req.user &&
-            req.user.role !== "admin" &&
-            reservation.user_id !== req.user.id) {
-            return res.status(403).json({ message: "Forbidden" });
+        const { role, branchId } = req.user;
+        /* ================= MANAGEMENT ================= */
+        if (isManagementRole(role)) {
+            if (role === "branch_manager" &&
+                branchId !== reservation.branch_id) {
+                return res.status(403).json({
+                    message: "Bạn không có quyền xem reservation của chi nhánh khác",
+                });
+            }
+            return res.json(reservation);
         }
-        res.json(reservation);
+        /* ================= NORMAL USER ================= */
+        if (reservation.user_id !== req.user.id) {
+            return res.status(403).json({
+                message: "Bạn không có quyền xem reservation này",
+            });
+        }
+        return res.json(reservation);
     }
     catch (err) {
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.getReservationById = getReservationById;
-/* ================= CANCEL ================= */
+/* =========================================================
+   CANCEL RESERVATION
+========================================================= */
 const cancelReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
+        }
         const id = Number(req.params.id);
-        if (!id || isNaN(id)) {
+        if (!id || Number.isNaN(id)) {
             return res.status(400).json({
                 message: "ID không hợp lệ",
             });
@@ -262,85 +412,206 @@ const cancelReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 message: "Reservation không tồn tại",
             });
         }
-        // check quyền
-        if (req.user &&
-            req.user.role !== "admin" &&
-            reservation.user_id !== req.user.id) {
-            return res.status(403).json({ message: "Forbidden" });
+        const { role, branchId } = req.user;
+        /* ================= MANAGEMENT ================= */
+        if (isManagementRole(role)) {
+            if (role === "branch_manager" &&
+                branchId !== reservation.branch_id) {
+                return res.status(403).json({
+                    message: "Bạn không có quyền hủy reservation của chi nhánh khác",
+                });
+            }
         }
-        yield reservation.update({ status: "cancelled" });
-        // trả bàn
+        else {
+            /* ================= USER ================= */
+            if (reservation.user_id !== req.user.id) {
+                return res.status(403).json({
+                    message: "Bạn không có quyền hủy reservation này",
+                });
+            }
+        }
+        /* ================= CANCEL ================= */
+        yield reservation.update({
+            status: "cancelled",
+        });
+        /* ================= FREE TABLE ================= */
         const table = yield Table_1.default.findByPk(reservation.table_id);
         if (table) {
-            yield table.update({ status: "available" });
+            yield table.update({
+                status: "available",
+            });
         }
-        res.json({ message: "Đã hủy đặt bàn" });
+        return res.json({
+            message: "Đã hủy đặt bàn",
+        });
     }
     catch (err) {
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.cancelReservation = cancelReservation;
-/* ================= UPDATE ================= */
+/* =========================================================
+   UPDATE RESERVATION
+========================================================= */
 const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
+        }
         const id = Number(req.params.id);
-        if (!id || isNaN(id)) {
+        if (!id || Number.isNaN(id)) {
             return res.status(400).json({
                 message: "ID không hợp lệ",
             });
         }
-        const { table_id, reservation_time, status } = req.body;
+        const { table_id, reservation_time, status, } = req.body;
         const reservation = yield Reservation_1.default.findByPk(id);
         if (!reservation) {
             return res.status(404).json({
                 message: "Reservation không tồn tại",
             });
         }
-        // quyền
-        if (req.user &&
-            req.user.role !== "admin" &&
-            reservation.user_id !== req.user.id) {
-            return res.status(403).json({ message: "Forbidden" });
+        const { role, branchId } = req.user;
+        /* ================= CHECK PERMISSION ================= */
+        if (isManagementRole(role)) {
+            if (role === "branch_manager" &&
+                branchId !== reservation.branch_id) {
+                return res.status(403).json({
+                    message: "Bạn không có quyền sửa reservation của chi nhánh khác",
+                });
+            }
+        }
+        else {
+            if (reservation.user_id !== req.user.id) {
+                return res.status(403).json({
+                    message: "Bạn không có quyền sửa reservation này",
+                });
+            }
+        }
+        /* ================= CHECK NEW TABLE ================= */
+        let newTable = null;
+        if (table_id !== undefined) {
+            newTable = yield Table_1.default.findByPk(table_id);
+            if (!newTable) {
+                return res.status(404).json({
+                    message: "Bàn mới không tồn tại",
+                });
+            }
+            if (!newTable.branch_id) {
+                return res.status(400).json({
+                    message: "Bàn mới chưa được gán chi nhánh",
+                });
+            }
+            /*
+             * Branch manager không được chuyển
+             * reservation sang chi nhánh khác.
+             */
+            if (role === "branch_manager" &&
+                newTable.branch_id !== branchId) {
+                return res.status(403).json({
+                    message: "Không thể chuyển reservation sang chi nhánh khác",
+                });
+            }
+            /*
+             * Với reservation hiện tại,
+             * không cho phép đổi sang branch khác.
+             */
+            if (reservation.branch_id !== null &&
+                newTable.branch_id !== reservation.branch_id) {
+                return res.status(400).json({
+                    message: "Bàn mới phải thuộc cùng chi nhánh",
+                });
+            }
+        }
+        /* ================= UPDATE ================= */
+        const newReservationTime = reservation_time !== undefined
+            ? new Date(reservation_time)
+            : reservation.reservation_time;
+        if (Number.isNaN(newReservationTime.getTime())) {
+            return res.status(400).json({
+                message: "Thời gian đặt bàn không hợp lệ",
+            });
         }
         yield reservation.update({
             table_id: table_id !== null && table_id !== void 0 ? table_id : reservation.table_id,
-            reservation_time: reservation_time !== null && reservation_time !== void 0 ? reservation_time : reservation.reservation_time,
+            reservation_time: newReservationTime,
             status: status !== null && status !== void 0 ? status : reservation.status,
         });
-        res.json({
+        return res.json({
             message: "Cập nhật thành công",
             data: reservation,
         });
     }
     catch (err) {
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.updateReservation = updateReservation;
-/* ================= DELETE (ADMIN) ================= */
+/* =========================================================
+   DELETE RESERVATION
+========================================================= */
 const deleteReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.user || req.user.role !== "admin") {
-            return res.status(403).json({ message: "Admin only" });
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
         }
         const id = Number(req.params.id);
-        if (!id || isNaN(id)) {
+        if (!id || Number.isNaN(id)) {
             return res.status(400).json({
                 message: "ID không hợp lệ",
             });
         }
+        /* ================= FIND RESERVATION ================= */
         const reservation = yield Reservation_1.default.findByPk(id);
         if (!reservation) {
             return res.status(404).json({
                 message: "Reservation không tồn tại",
             });
         }
+        const { role, branchId } = req.user;
+        /* ================= ROLE ================= */
+        if (!isManagementRole(role)) {
+            return res.status(403).json({
+                message: "Bạn không có quyền xóa reservation",
+            });
+        }
+        /* ================= BRANCH ISOLATION ================= */
+        if (role === "branch_manager" &&
+            branchId !== reservation.branch_id) {
+            return res.status(403).json({
+                message: "Bạn không có quyền xóa reservation của chi nhánh khác",
+            });
+        }
+        /* ================= DELETE ================= */
         yield reservation.destroy();
-        res.json({ message: "Xóa thành công" });
+        return res.json({
+            message: "Xóa thành công",
+        });
     }
     catch (err) {
-        res.status(500).json({ message: "Lỗi server", error: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Unknown server error";
+        return res.status(500).json({
+            message: "Lỗi server",
+            error: message,
+        });
     }
 });
 exports.deleteReservation = deleteReservation;

@@ -78,19 +78,64 @@ async function findAvailableTables(branchId: number, start: Date, end: Date, gue
 }
 
 export const checkAvailability = async (req: Request, res: Response) => {
+  console.log("========== CHECK AVAILABILITY ==========");
+  console.log("BODY:", req.body);
+
   const branchId = Number(req.body.branch_id);
   const guestCount = Number(req.body.guest_count);
-  if (!Number.isInteger(branchId) || !Number.isInteger(guestCount) || guestCount < 1) {
-    return res.status(400).json({ message: "branch_id và guest_count phải hợp lệ" });
+
+  console.log("branchId:", branchId);
+  console.log("guestCount:", guestCount);
+  console.log("start_time:", req.body.start_time);
+  console.log("new Date:", new Date(String(req.body.start_time)));
+  console.log("now:", new Date());
+
+  if (
+    !Number.isInteger(branchId) ||
+    !Number.isInteger(guestCount) ||
+    guestCount < 1
+  ) {
+    return res.status(400).json({
+      message: "branch_id và guest_count phải hợp lệ",
+    });
   }
-  const window = await getBranchAndWindow(branchId, req.body.start_time);
-  if (!window) return res.status(400).json({ message: "Chi nhánh không nhận đặt bàn hoặc thời gian không hợp lệ" });
-  const tables = await findAvailableTables(branchId, window.start, window.end, guestCount);
+
+  const branch = await Branch.findByPk(branchId);
+
+  console.log("BRANCH:", branch?.toJSON());
+
+  const settings = await BranchSetting.findOne({
+    where: { branch_id: branchId },
+  });
+
+  console.log("BRANCH SETTINGS:", settings?.toJSON());
+
+  const window = await getBranchAndWindow(
+    branchId,
+    req.body.start_time
+  );
+
+  console.log("WINDOW:", window);
+
+  if (!window) {
+    return res.status(400).json({
+      message: "Chi nhánh không nhận đặt bàn hoặc thời gian không hợp lệ",
+    });
+  }
+
+  const tables = await findAvailableTables(
+    branchId,
+    window.start,
+    window.end,
+    guestCount
+  );
+
   return res.json({
     data: {
       start_time: window.start,
       end_time: window.end,
-      duration_minutes: window.settings?.default_table_duration_minutes || 120,
+      duration_minutes:
+        window.settings?.default_table_duration_minutes || 120,
       recommended_table_id: tables[0]?.id || null,
       tables,
     },

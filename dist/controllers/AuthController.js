@@ -17,53 +17,82 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const models_1 = require("../models");
 const bcrypt_1 = __importDefault(require("bcrypt"));
 // LOGIN
+// LOGIN
 const login = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {
         const { email, password } = req.body;
-        // tìm user
+        // 1. Kiểm tra dữ liệu đầu vào
+        if (!email || !password) {
+            return res.status(400).json({
+                message: "Email và mật khẩu là bắt buộc",
+            });
+        }
+        // 2. Tìm user theo email
         const user = yield models_1.User.findOne({
             where: { email },
-            include: [{ model: models_1.Role, as: "role", attributes: ["name"] }],
+            include: [
+                {
+                    model: models_1.Role,
+                    as: "role",
+                    attributes: ["id", "name"],
+                },
+            ],
         });
-        // không tồn tại
+        // 3. Không tìm thấy user
         if (!user) {
             return res.status(400).json({
                 message: "Sai email hoặc mật khẩu",
             });
         }
-        // kiểm tra password
+        // 4. Kiểm tra trạng thái tài khoản
+        const status = user.getDataValue("status");
+        if (status !== "active") {
+            return res.status(403).json({
+                message: "Tài khoản đã bị vô hiệu hóa",
+            });
+        }
+        // 5. Kiểm tra password
         const isMatch = yield bcrypt_1.default.compare(password, user.getDataValue("password"));
         if (!isMatch) {
             return res.status(400).json({
                 message: "Sai email hoặc mật khẩu",
             });
         }
-        // lấy role thật
+        // 6. Lấy role từ database
         const role = ((_a = user.role) === null || _a === void 0 ? void 0 : _a.name) || "user";
-        console.log("LOGIN ROLE:", user.getDataValue("role_id"));
-        // tạo token
+        // 7. Lấy branch_id
+        const branchId = user.getDataValue("branch_id");
+        console.log("========== LOGIN ==========");
+        console.log("User ID:", user.getDataValue("id"));
+        console.log("Role:", role);
+        console.log("Branch ID:", branchId);
+        console.log("============================");
+        // 8. Tạo JWT
         const token = jsonwebtoken_1.default.sign({
             id: user.getDataValue("id"),
             role,
+            branchId: branchId !== null && branchId !== void 0 ? branchId : null,
         }, process.env.JWT_SECRET, {
             expiresIn: "1d",
         });
-        // trả dữ liệu
+        // 9. Trả dữ liệu về frontend
         return res.json({
             token,
             user: {
-                id: user.get("id"),
-                name: user.get("name"),
-                email: user.get("email"),
+                id: user.getDataValue("id"),
+                name: user.getDataValue("name"),
+                email: user.getDataValue("email"),
                 role,
+                branchId: branchId !== null && branchId !== void 0 ? branchId : null,
             },
         });
     }
     catch (err) {
         console.log("login error:", err);
+        const errorMessage = err instanceof Error ? err.message : "Đã xảy ra lỗi khi đăng nhập";
         return res.status(500).json({
-            error: err.message,
+            message: errorMessage,
         });
     }
 });

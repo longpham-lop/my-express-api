@@ -1,26 +1,94 @@
 import { Request, Response } from "express";
 import Table from "../models/Table";
 import Reservation from "../models/Reservation";
+import TableArea from "../models/TableArea";
+import Branch from "../models/Branch";
 
 export const createTable = async (req: Request, res: Response) => {
   try {
-    const { name, capacity, type, branch_id, area_id } = req.body;
-    if (!name || !Number.isInteger(Number(capacity)) || Number(capacity) <= 0) {
-      return res.status(400).json({ message: "name và capacity hợp lệ là bắt buộc" });
+    const {
+      name,
+      capacity,
+      type,
+      branch_id,
+      area_id,
+    } = req.body;
+
+    if (
+      !name ||
+      !Number.isInteger(Number(capacity)) ||
+      Number(capacity) <= 0
+    ) {
+      return res.status(400).json({
+        message: "name và capacity hợp lệ là bắt buộc",
+      });
+    }
+
+    const branchId = Number(branch_id);
+
+    if (!Number.isInteger(branchId)) {
+      return res.status(400).json({
+        message: "Chi nhánh không hợp lệ",
+      });
+    }
+
+    // Kiểm tra chi nhánh tồn tại
+    const branch = await Branch.findByPk(branchId);
+
+    if (!branch) {
+      return res.status(404).json({
+        message: "Không tìm thấy chi nhánh",
+      });
+    }
+
+    const areaId =
+      area_id !== undefined &&
+      area_id !== null &&
+      area_id !== ""
+        ? Number(area_id)
+        : null;
+
+    // Nếu có khu vực thì kiểm tra khu vực thuộc đúng chi nhánh
+    if (areaId !== null) {
+      if (!Number.isInteger(areaId)) {
+        return res.status(400).json({
+          message: "Khu vực không hợp lệ",
+        });
+      }
+
+      const area = await TableArea.findOne({
+        where: {
+          id: areaId,
+          branch_id: branchId,
+        },
+      });
+
+      if (!area) {
+        return res.status(400).json({
+          message: "Khu vực không thuộc chi nhánh đã chọn",
+        });
+      }
     }
 
     const table = await Table.create({
-      name,
+      name: name.trim(),
       capacity: Number(capacity),
-      type: type?.trim().toLowerCase() === "vip" ? "vip" : "normal",
+      type:
+        type?.trim().toLowerCase() === "vip"
+          ? "vip"
+          : "normal",
       status: "available",
-      branch_id: branch_id ? Number(branch_id) : undefined,
-      area_id: area_id ? Number(area_id) : null,
+      branch_id: branchId,
+      area_id: areaId,
     });
 
-    res.status(201).json(table);
+    return res.status(201).json(table);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("CREATE TABLE ERROR:", err);
+
+    return res.status(500).json({
+      error: err.message,
+    });
   }
 };
 // GET ALL TABLES

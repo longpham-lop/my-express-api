@@ -4,6 +4,7 @@ import {
   Branch,
   BranchSetting,
   StaffBranch,
+  Table,
   TableArea,
   User,
 } from "../models";
@@ -588,6 +589,142 @@ export const assignStaff = async (
 
     return res.status(500).json({
       message: "Không thể phân công nhân viên",
+    });
+  }
+};
+export const updateArea = async (req: Request, res: Response) => {
+  try {
+    const branchId = Number(req.params.id);
+    const areaId = Number(req.params.areaId);
+
+    const { name, sort_order, is_active } = req.body;
+
+    if (!Number.isInteger(branchId)) {
+      return res.status(400).json({
+        message: "branch_id không hợp lệ",
+      });
+    }
+
+    if (!Number.isInteger(areaId)) {
+      return res.status(400).json({
+        message: "area_id không hợp lệ",
+      });
+    }
+
+    const area = await TableArea.findOne({
+      where: {
+        id: areaId,
+        branch_id: branchId,
+      },
+    });
+
+    if (!area) {
+      return res.status(404).json({
+        message: "Không tìm thấy khu vực",
+      });
+    }
+
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        return res.status(400).json({
+          message: "Tên khu vực không được để trống",
+        });
+      }
+
+      area.name = String(name).trim();
+    }
+
+    if (sort_order !== undefined) {
+      const order = Number(sort_order);
+
+      if (!Number.isInteger(order) || order < 0) {
+        return res.status(400).json({
+          message: "Thứ tự khu vực không hợp lệ",
+        });
+      }
+
+      area.sort_order = order;
+    }
+
+    if (is_active !== undefined) {
+      const active = Boolean(is_active);
+
+      if (typeof req.body.is_active !== "boolean") {
+        return res.status(400).json({
+          message: "is_active phải là boolean",
+        });
+      }
+
+      area.is_active = active;
+    }
+
+    await area.save();
+
+    return res.status(200).json({
+      message: "Cập nhật khu vực thành công",
+      data: area,
+    });
+  } catch (err) {
+    console.error("UPDATE AREA ERROR:", err);
+
+    return res.status(500).json({
+      message: "Không thể cập nhật khu vực",
+    });
+  }
+};
+export const deleteArea = async (req: Request, res: Response) => {
+  try {
+    const branchId = Number(req.params.id);
+    const areaId = Number(req.params.areaId);
+
+    if (!Number.isInteger(branchId)) {
+      return res.status(400).json({
+        message: "branch_id không hợp lệ",
+      });
+    }
+
+    if (!Number.isInteger(areaId)) {
+      return res.status(400).json({
+        message: "area_id không hợp lệ",
+      });
+    }
+
+    const area = await TableArea.findOne({
+      where: {
+        id: areaId,
+        branch_id: branchId,
+      },
+    });
+
+    if (!area) {
+      return res.status(404).json({
+        message: "Không tìm thấy khu vực",
+      });
+    }
+
+    const tableCount = await Table.count({
+      where: {
+        area_id: areaId,
+      },
+    });
+
+    if (tableCount > 0) {
+      return res.status(400).json({
+        message:
+          "Không thể xóa khu vực vì vẫn còn bàn thuộc khu vực này",
+      });
+    }
+
+    await area.destroy();
+
+    return res.status(200).json({
+      message: "Xóa khu vực thành công",
+    });
+  } catch (err) {
+    console.error("DELETE AREA ERROR:", err);
+
+    return res.status(500).json({
+      message: "Không thể xóa khu vực",
     });
   }
 };

@@ -8,6 +8,8 @@ import {
   listBranches,
   listPublicBranches,
   updateBranch,
+  updateArea,
+  deleteArea,
   updateBranchSettings,
 } from "../controllers/BranchController";
 
@@ -58,6 +60,10 @@ router.put("/:id/settings", updateBranchSettings);
 router.get("/:id/areas", listAreas);
 
 router.post("/:id/areas", createArea);
+
+router.put("/:id/areas/:areaId", updateArea);
+
+router.delete("/:id/areas/:areaId", deleteArea);
 
 router.put("/:id/staff", assignStaff);
 

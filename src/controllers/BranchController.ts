@@ -15,12 +15,77 @@ const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 /**
  * =========================================================
+ * HELPER - KIỂM TRA QUYỀN CHI NHÁNH
+ * =========================================================
+ */
+
+/**
+ * Admin và Chain Manager:
+ * Có quyền trên tất cả chi nhánh.
+ */
+const isGlobalRole = (role?: string) => {
+  return role === "admin" || role === "chain_manager";
+};
+
+/**
+ * Branch Manager:
+ * Chỉ được thao tác trên chi nhánh được gán.
+ */
+const isBranchManager = (role?: string) => {
+  return role === "branch_manager";
+};
+
+/**
+ * Kiểm tra Branch Manager có được phép thao tác
+ * trên branchId hay không.
+ *
+ * Return:
+ * true  -> được phép
+ * false -> không được phép
+ */
+const canAccessBranch = (
+  req: AuthRequest,
+  branchId: number
+): boolean => {
+  if (!req.user) {
+    return false;
+  }
+
+  /**
+   * Admin / Chain Manager:
+   * được phép tất cả.
+   */
+  if (isGlobalRole(req.user.role)) {
+    return true;
+  }
+
+  /**
+   * Branch Manager:
+   * chỉ được phép branch của chính mình.
+   */
+  if (isBranchManager(req.user.role)) {
+    return (
+      req.user.branchId !== null &&
+      req.user.branchId === branchId
+    );
+  }
+
+  return false;
+};
+
+/**
+ * =========================================================
  * PUBLIC - DANH SÁCH CHI NHÁNH
  * =========================================================
  *
  * Không yêu cầu đăng nhập.
  *
- * Chỉ lấy các chi nhánh đang hoạt động.
+ * Dùng cho:
+ * - Website khách hàng
+ * - Trang đặt bàn
+ * - Trang địa điểm
+ *
+ * KHÔNG dùng API này cho Admin.
  */
 export const listPublicBranches = async (
   _req: Request,
@@ -46,11 +111,14 @@ export const listPublicBranches = async (
       order: [["name", "ASC"]],
     });
 
-    return res.json({
+    return res.status(200).json({
       data: branches,
     });
   } catch (error) {
-    console.error("listPublicBranches error:", error);
+    console.error(
+      "LIST PUBLIC BRANCHES ERROR:",
+      error
+    );
 
     return res.status(500).json({
       message: "Không thể tải danh sách chi nhánh",
@@ -64,37 +132,53 @@ export const listPublicBranches = async (
  * =========================================================
  *
  * Admin:
- *      Xem tất cả chi nhánh.
+ *      Xem tất cả.
  *
  * Chain Manager:
- *      Xem tất cả chi nhánh.
+ *      Xem tất cả.
  *
  * Branch Manager:
- *      Chỉ xem chi nhánh mà mình đang quản lý.
+ *      Chỉ xem branch của mình.
  */
 export const listBranches = async (
   req: AuthRequest,
   res: Response
 ) => {
   try {
-    const role = req.user?.role;
-    const branchId = req.user?.branchId;
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    const role = req.user.role;
+    const branchId = req.user.branchId;
 
     /**
-     * Điều kiện tìm kiếm.
-     *
-     * Admin và Chain Manager:
-     *      không giới hạn branch_id.
+     * Branch Manager phải được gán branch.
+     */
+    if (
+      isBranchManager(role) &&
+      !branchId
+    ) {
+      return res.status(403).json({
+        message:
+          "Tài khoản Branch Manager chưa được gán chi nhánh",
+      });
+    }
+
+    /**
+     * Admin / Chain Manager:
+     * lấy tất cả branch.
      *
      * Branch Manager:
-     *      chỉ lấy branch_id của chính mình.
+     * chỉ lấy branch của mình.
      */
-    const where =
-      role === "branch_manager"
-        ? {
-            id: branchId ?? -1,
-          }
-        : undefined;
+    const where = isBranchManager(role)
+      ? {
+          id: branchId!,
+        }
+      : undefined;
 
     const branches = await Branch.findAll({
       where,
@@ -109,11 +193,14 @@ export const listBranches = async (
       order: [["name", "ASC"]],
     });
 
-    return res.json({
+    return res.status(200).json({
       data: branches,
     });
   } catch (error) {
-    console.error("listBranches error:", error);
+    console.error(
+      "LIST BRANCHES ERROR:",
+      error
+    );
 
     return res.status(500).json({
       message: "Không thể tải danh sách chi nhánh",
@@ -126,7 +213,11 @@ export const listBranches = async (
  * CREATE BRANCH
  * =========================================================
  *
- * Chỉ Admin / Chain Manager được gọi route này.
+ * Chỉ Admin / Chain Manager được phép.
+ *
+ * Route cũng phải được bảo vệ bằng:
+ *
+ * requireRole("admin", "chain_manager")
  */
 export const createBranch = async (
   req: Request,
@@ -159,23 +250,23 @@ export const createBranch = async (
     }
 
     /**
-     * Chuẩn hóa mã chi nhánh.
+     * Chuẩn hóa code.
      *
-     * Ví dụ:
-     * hn01 → HN01
+     * hn01 -> HN01
      */
     const normalizedCode = String(code)
       .trim()
       .toUpperCase();
 
     /**
-     * Kiểm tra code đã tồn tại chưa.
+     * Kiểm tra code trùng.
      */
-    const existingBranch = await Branch.findOne({
-      where: {
-        code: normalizedCode,
-      },
-    });
+    const existingBranch =
+      await Branch.findOne({
+        where: {
+          code: normalizedCode,
+        },
+      });
 
     if (existingBranch) {
       return res.status(409).json({
@@ -184,23 +275,26 @@ export const createBranch = async (
     }
 
     /**
-     * Tạo chi nhánh.
+     * Tạo branch.
      */
     const branch = await Branch.create({
       code: normalizedCode,
       name: String(name).trim(),
       address: String(address).trim(),
-      phone: phone ? String(phone).trim() : undefined,
+      phone: phone
+        ? String(phone).trim()
+        : undefined,
       opening_time,
       closing_time,
     });
 
     /**
-     * Tạo settings mặc định cho chi nhánh.
+     * Tạo settings mặc định.
      */
-    const settings = await BranchSetting.create({
-      branch_id: branch.id!,
-    });
+    const settings =
+      await BranchSetting.create({
+        branch_id: branch.id!,
+      });
 
     return res.status(201).json({
       data: {
@@ -209,7 +303,10 @@ export const createBranch = async (
       },
     });
   } catch (error) {
-    console.error("createBranch error:", error);
+    console.error(
+      "CREATE BRANCH ERROR:",
+      error
+    );
 
     return res.status(500).json({
       message: "Không thể tạo chi nhánh",
@@ -222,7 +319,9 @@ export const createBranch = async (
  * UPDATE BRANCH
  * =========================================================
  *
- * Chỉ Admin / Chain Manager được gọi.
+ * Chỉ Admin / Chain Manager.
+ *
+ * Branch Manager KHÔNG được gọi chức năng này.
  */
 export const updateBranch = async (
   req: Request,
@@ -237,7 +336,8 @@ export const updateBranch = async (
       });
     }
 
-    const branch = await Branch.findByPk(branchId);
+    const branch =
+      await Branch.findByPk(branchId);
 
     if (!branch) {
       return res.status(404).json({
@@ -258,11 +358,17 @@ export const updateBranch = async (
       "status",
     ] as const;
 
-    const values: Record<string, unknown> = {};
+    const values: Record<
+      string,
+      unknown
+    > = {};
 
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        values[field] = req.body[field];
+      if (
+        req.body[field] !== undefined
+      ) {
+        values[field] =
+          req.body[field];
       }
     }
 
@@ -271,10 +377,13 @@ export const updateBranch = async (
      */
     if (
       values.opening_time !== undefined &&
-      !timePattern.test(String(values.opening_time))
+      !timePattern.test(
+        String(values.opening_time)
+      )
     ) {
       return res.status(400).json({
-        message: "Giờ mở cửa phải theo định dạng HH:mm",
+        message:
+          "Giờ mở cửa phải theo định dạng HH:mm",
       });
     }
 
@@ -283,32 +392,42 @@ export const updateBranch = async (
      */
     if (
       values.closing_time !== undefined &&
-      !timePattern.test(String(values.closing_time))
+      !timePattern.test(
+        String(values.closing_time)
+      )
     ) {
       return res.status(400).json({
-        message: "Giờ đóng cửa phải theo định dạng HH:mm",
+        message:
+          "Giờ đóng cửa phải theo định dạng HH:mm",
       });
     }
 
     /**
-     * Không có dữ liệu để cập nhật.
+     * Không có dữ liệu.
      */
-    if (Object.keys(values).length === 0) {
+    if (
+      Object.keys(values).length === 0
+    ) {
       return res.status(400).json({
-        message: "Không có dữ liệu để cập nhật",
+        message:
+          "Không có dữ liệu để cập nhật",
       });
     }
 
     await branch.update(values);
 
-    return res.json({
+    return res.status(200).json({
       data: branch,
     });
   } catch (error) {
-    console.error("updateBranch error:", error);
+    console.error(
+      "UPDATE BRANCH ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể cập nhật chi nhánh",
+      message:
+        "Không thể cập nhật chi nhánh",
     });
   }
 };
@@ -317,6 +436,8 @@ export const updateBranch = async (
  * =========================================================
  * UPDATE BRANCH SETTINGS
  * =========================================================
+ *
+ * Chỉ Admin / Chain Manager.
  */
 export const updateBranchSettings = async (
   req: Request,
@@ -327,27 +448,30 @@ export const updateBranchSettings = async (
 
     if (!Number.isInteger(branchId)) {
       return res.status(400).json({
-        message: "ID chi nhánh không hợp lệ",
+        message:
+          "ID chi nhánh không hợp lệ",
       });
     }
 
-    const branch = await Branch.findByPk(branchId);
+    const branch =
+      await Branch.findByPk(branchId);
 
     if (!branch) {
       return res.status(404).json({
-        message: "Không tìm thấy chi nhánh",
+        message:
+          "Không tìm thấy chi nhánh",
       });
     }
 
     /**
-     * Tìm settings hiện tại.
-     * Nếu chưa có thì tạo mới.
+     * Tìm hoặc tạo settings.
      */
-    const [settings] = await BranchSetting.findOrCreate({
-      where: {
-        branch_id: branchId,
-      },
-    });
+    const [settings] =
+      await BranchSetting.findOrCreate({
+        where: {
+          branch_id: branchId,
+        },
+      });
 
     const fields = [
       "default_table_duration_minutes",
@@ -355,15 +479,26 @@ export const updateBranchSettings = async (
       "reservation_lead_time_minutes",
     ] as const;
 
-    const values: Record<string, number> = {};
+    const values: Record<
+      string,
+      number
+    > = {};
 
     for (const field of fields) {
-      if (req.body[field] !== undefined) {
-        const value = Number(req.body[field]);
+      if (
+        req.body[field] !== undefined
+      ) {
+        const value = Number(
+          req.body[field]
+        );
 
-        if (!Number.isInteger(value) || value <= 0) {
+        if (
+          !Number.isInteger(value) ||
+          value <= 0
+        ) {
           return res.status(400).json({
-            message: `${field} phải là số nguyên dương`,
+            message:
+              `${field} phải là số nguyên dương`,
           });
         }
 
@@ -371,22 +506,29 @@ export const updateBranchSettings = async (
       }
     }
 
-    if (Object.keys(values).length === 0) {
+    if (
+      Object.keys(values).length === 0
+    ) {
       return res.status(400).json({
-        message: "Không có dữ liệu để cập nhật",
+        message:
+          "Không có dữ liệu để cập nhật",
       });
     }
 
     await settings.update(values);
 
-    return res.json({
+    return res.status(200).json({
       data: settings,
     });
   } catch (error) {
-    console.error("updateBranchSettings error:", error);
+    console.error(
+      "UPDATE BRANCH SETTINGS ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể cập nhật cấu hình chi nhánh",
+      message:
+        "Không thể cập nhật cấu hình chi nhánh",
     });
   }
 };
@@ -396,54 +538,92 @@ export const updateBranchSettings = async (
  * LIST AREAS
  * =========================================================
  *
- * Ví dụ:
+ * Admin:
+ *      được xem tất cả.
  *
- * Chi nhánh 1
- * ├── Tầng 1
- * ├── Tầng 2
- * ├── Ngoài trời
- * └── VIP
+ * Chain Manager:
+ *      được xem tất cả.
+ *
+ * Branch Manager:
+ *      chỉ được xem area của branch mình.
  */
 export const listAreas = async (
-  req: Request,
+  req: AuthRequest,
   res: Response
 ) => {
   try {
-    const branchId = Number(req.params.id);
+    const branchId = Number(
+      req.params.id
+    );
 
     if (!Number.isInteger(branchId)) {
       return res.status(400).json({
-        message: "ID chi nhánh không hợp lệ",
+        message:
+          "branch_id không hợp lệ",
       });
     }
 
-    const branch = await Branch.findByPk(branchId);
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    /**
+     * Kiểm tra quyền branch.
+     */
+    if (
+      !canAccessBranch(
+        req,
+        branchId
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền truy cập chi nhánh này",
+      });
+    }
+
+    /**
+     * Kiểm tra branch tồn tại.
+     */
+    const branch =
+      await Branch.findByPk(branchId);
 
     if (!branch) {
       return res.status(404).json({
-        message: "Không tìm thấy chi nhánh",
+        message:
+          "Không tìm thấy chi nhánh",
       });
     }
 
-    const data = await TableArea.findAll({
-      where: {
-        branch_id: branchId,
-      },
+    /**
+     * Lấy danh sách khu vực.
+     */
+    const areas =
+      await TableArea.findAll({
+        where: {
+          branch_id: branchId,
+        },
 
-      order: [
-        ["sort_order", "ASC"],
-        ["name", "ASC"],
-      ],
-    });
+        order: [
+          ["sort_order", "ASC"],
+          ["name", "ASC"],
+        ],
+      });
 
-    return res.json({
-      data,
+    return res.status(200).json({
+      data: areas,
     });
   } catch (error) {
-    console.error("listAreas error:", error);
+    console.error(
+      "LIST AREAS ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể tải danh sách khu vực",
+      message:
+        "Không thể tải danh sách khu vực",
     });
   }
 };
@@ -452,261 +632,413 @@ export const listAreas = async (
  * =========================================================
  * CREATE AREA
  * =========================================================
+ *
+ * Admin:
+ *      được tạo ở tất cả branch.
+ *
+ * Chain Manager:
+ *      được tạo ở tất cả branch.
+ *
+ * Branch Manager:
+ *      chỉ được tạo ở branch của mình.
  */
 export const createArea = async (
-  req: Request,
+  req: AuthRequest,
   res: Response
 ) => {
   try {
-    const branchId = Number(req.params.id);
+    const branchId = Number(
+      req.params.id
+    );
 
     if (!Number.isInteger(branchId)) {
       return res.status(400).json({
-        message: "ID chi nhánh không hợp lệ",
+        message:
+          "branch_id không hợp lệ",
       });
     }
 
-    const branch = await Branch.findByPk(branchId);
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    /**
+     * Branch isolation.
+     */
+    if (
+      !canAccessBranch(
+        req,
+        branchId
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền tạo khu vực cho chi nhánh này",
+      });
+    }
+
+    /**
+     * Kiểm tra branch.
+     */
+    const branch =
+      await Branch.findByPk(branchId);
 
     if (!branch) {
       return res.status(404).json({
-        message: "Không tìm thấy chi nhánh",
+        message:
+          "Không tìm thấy chi nhánh",
       });
     }
 
-    const name =
-      typeof req.body.name === "string"
-        ? req.body.name.trim()
-        : "";
-
-    if (!name) {
-      return res.status(400).json({
-        message: "Tên khu vực là bắt buộc",
-      });
-    }
-
-    const sortOrder =
-      req.body.sort_order !== undefined
-        ? Number(req.body.sort_order)
-        : 0;
-
-    if (!Number.isInteger(sortOrder)) {
-      return res.status(400).json({
-        message: "sort_order phải là số nguyên",
-      });
-    }
-
-    const data = await TableArea.create({
-      branch_id: branchId,
+    const {
       name,
-      sort_order: sortOrder,
-    });
+      sort_order,
+    } = req.body;
+
+    /**
+     * Validate tên.
+     */
+    if (!String(name || "").trim()) {
+      return res.status(400).json({
+        message:
+          "Tên khu vực không được để trống",
+      });
+    }
+
+    /**
+     * Validate sort_order.
+     */
+    let normalizedSortOrder = 0;
+
+    if (
+      sort_order !== undefined
+    ) {
+      normalizedSortOrder =
+        Number(sort_order);
+
+      if (
+        !Number.isInteger(
+          normalizedSortOrder
+        ) ||
+        normalizedSortOrder < 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Thứ tự khu vực không hợp lệ",
+        });
+      }
+    }
+
+    /**
+     * Tạo area.
+     */
+    const area =
+      await TableArea.create({
+        branch_id: branchId,
+        name: String(name).trim(),
+        sort_order:
+          normalizedSortOrder,
+      });
 
     return res.status(201).json({
-      data,
+      message:
+        "Tạo khu vực thành công",
+      data: area,
     });
   } catch (error) {
-    console.error("createArea error:", error);
+    console.error(
+      "CREATE AREA ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể tạo khu vực",
+      message:
+        "Không thể tạo khu vực",
     });
   }
 };
 
 /**
  * =========================================================
- * ASSIGN STAFF TO BRANCH
+ * UPDATE AREA
  * =========================================================
+ *
+ * Admin:
+ *      tất cả.
+ *
+ * Chain Manager:
+ *      tất cả.
+ *
+ * Branch Manager:
+ *      chỉ branch của mình.
  */
-export const assignStaff = async (
-  req: Request,
+export const updateArea = async (
+  req: AuthRequest,
   res: Response
 ) => {
   try {
-    const branchId = Number(req.params.id);
-    const userId = Number(req.body.user_id);
+    const branchId = Number(
+      req.params.id
+    );
+
+    const areaId = Number(
+      req.params.areaId
+    );
 
     if (!Number.isInteger(branchId)) {
       return res.status(400).json({
-        message: "ID chi nhánh không hợp lệ",
-      });
-    }
-
-    if (!Number.isInteger(userId)) {
-      return res.status(400).json({
-        message: "user_id không hợp lệ",
-      });
-    }
-
-    const [branch, user] = await Promise.all([
-      Branch.findByPk(branchId),
-      User.findByPk(userId),
-    ]);
-
-    if (!branch || !user) {
-      return res.status(404).json({
-        message: "Không tìm thấy chi nhánh hoặc nhân viên",
-      });
-    }
-
-    const isPrimary = Boolean(req.body.is_primary);
-
-    const [assignment, created] =
-      await StaffBranch.findOrCreate({
-        where: {
-          branch_id: branchId,
-          user_id: userId,
-        },
-
-        defaults: {
-          branch_id: branchId,
-          user_id: userId,
-          is_primary: isPrimary,
-          is_active: true,
-        },
-      });
-
-    /**
-     * Nếu assignment đã tồn tại
-     * thì cập nhật lại thông tin.
-     */
-    if (!created) {
-      await assignment.update({
-        is_primary: isPrimary,
-        is_active:
-          req.body.is_active !== undefined
-            ? Boolean(req.body.is_active)
-            : true,
-      });
-    }
-
-    return res.status(created ? 201 : 200).json({
-      data: assignment,
-    });
-  } catch (error) {
-    console.error("assignStaff error:", error);
-
-    return res.status(500).json({
-      message: "Không thể phân công nhân viên",
-    });
-  }
-};
-export const updateArea = async (req: Request, res: Response) => {
-  try {
-    const branchId = Number(req.params.id);
-    const areaId = Number(req.params.areaId);
-
-    const { name, sort_order, is_active } = req.body;
-
-    if (!Number.isInteger(branchId)) {
-      return res.status(400).json({
-        message: "branch_id không hợp lệ",
+        message:
+          "branch_id không hợp lệ",
       });
     }
 
     if (!Number.isInteger(areaId)) {
       return res.status(400).json({
-        message: "area_id không hợp lệ",
+        message:
+          "area_id không hợp lệ",
       });
     }
 
-    const area = await TableArea.findOne({
-      where: {
-        id: areaId,
-        branch_id: branchId,
-      },
-    });
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    /**
+     * Kiểm tra branch isolation
+     * TRƯỚC khi cho phép sửa area.
+     */
+    if (
+      !canAccessBranch(
+        req,
+        branchId
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền thao tác khu vực của chi nhánh này",
+      });
+    }
+
+    /**
+     * Area bắt buộc phải thuộc đúng branch.
+     */
+    const area =
+      await TableArea.findOne({
+        where: {
+          id: areaId,
+          branch_id: branchId,
+        },
+      });
 
     if (!area) {
       return res.status(404).json({
-        message: "Không tìm thấy khu vực",
+        message:
+          "Không tìm thấy khu vực",
       });
     }
 
+    const {
+      name,
+      sort_order,
+      is_active,
+      status,
+    } = req.body;
+
+    /**
+     * Cập nhật tên.
+     */
     if (name !== undefined) {
-      if (!String(name).trim()) {
+      if (
+        !String(name).trim()
+      ) {
         return res.status(400).json({
-          message: "Tên khu vực không được để trống",
+          message:
+            "Tên khu vực không được để trống",
         });
       }
 
-      area.name = String(name).trim();
+      area.name =
+        String(name).trim();
     }
 
-    if (sort_order !== undefined) {
-      const order = Number(sort_order);
+    /**
+     * Cập nhật thứ tự.
+     */
+    if (
+      sort_order !== undefined
+    ) {
+      const order =
+        Number(sort_order);
 
-      if (!Number.isInteger(order) || order < 0) {
+      if (
+        !Number.isInteger(order) ||
+        order < 0
+      ) {
         return res.status(400).json({
-          message: "Thứ tự khu vực không hợp lệ",
+          message:
+            "Thứ tự khu vực không hợp lệ",
         });
       }
 
       area.sort_order = order;
     }
 
-    if (is_active !== undefined) {
-      const active = Boolean(is_active);
-
-      if (typeof req.body.is_active !== "boolean") {
+    /**
+     * Hỗ trợ is_active
+     * nếu model hiện tại sử dụng field này.
+     */
+    if (
+      is_active !== undefined
+    ) {
+      if (
+        typeof is_active !==
+        "boolean"
+      ) {
         return res.status(400).json({
-          message: "is_active phải là boolean",
+          message:
+            "is_active phải là boolean",
         });
       }
 
-      area.is_active = active;
+      area.is_active =
+        is_active;
+    }
+
+    /**
+     * Giữ tương thích với frontend cũ nếu gửi status hoặc is_active.
+     * Model thực tế chỉ có is_active, nên không được gán status.
+     */
+    if (
+      status !== undefined &&
+      is_active === undefined
+    ) {
+      if (
+        typeof status === "boolean"
+      ) {
+        area.is_active = status;
+      } else if (
+        typeof status === "string"
+      ) {
+        const normalized =
+          status.toLowerCase();
+
+        if (
+          normalized === "active" ||
+          normalized === "inactive"
+        ) {
+          area.is_active =
+            normalized === "active";
+        }
+      }
     }
 
     await area.save();
 
     return res.status(200).json({
-      message: "Cập nhật khu vực thành công",
+      message:
+        "Cập nhật khu vực thành công",
       data: area,
     });
-  } catch (err) {
-    console.error("UPDATE AREA ERROR:", err);
+  } catch (error) {
+    console.error(
+      "UPDATE AREA ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể cập nhật khu vực",
+      message:
+        "Không thể cập nhật khu vực",
     });
   }
 };
-export const deleteArea = async (req: Request, res: Response) => {
+
+/**
+ * =========================================================
+ * DELETE AREA
+ * =========================================================
+ *
+ * Không cho xóa area nếu vẫn còn bàn.
+ */
+export const deleteArea = async (
+  req: AuthRequest,
+  res: Response
+) => {
   try {
-    const branchId = Number(req.params.id);
-    const areaId = Number(req.params.areaId);
+    const branchId = Number(
+      req.params.id
+    );
+
+    const areaId = Number(
+      req.params.areaId
+    );
 
     if (!Number.isInteger(branchId)) {
       return res.status(400).json({
-        message: "branch_id không hợp lệ",
+        message:
+          "branch_id không hợp lệ",
       });
     }
 
     if (!Number.isInteger(areaId)) {
       return res.status(400).json({
-        message: "area_id không hợp lệ",
+        message:
+          "area_id không hợp lệ",
       });
     }
 
-    const area = await TableArea.findOne({
-      where: {
-        id: areaId,
-        branch_id: branchId,
-      },
-    });
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    /**
+     * Branch isolation.
+     */
+    if (
+      !canAccessBranch(
+        req,
+        branchId
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xóa khu vực của chi nhánh này",
+      });
+    }
+
+    /**
+     * Area phải thuộc đúng branch.
+     */
+    const area =
+      await TableArea.findOne({
+        where: {
+          id: areaId,
+          branch_id: branchId,
+        },
+      });
 
     if (!area) {
       return res.status(404).json({
-        message: "Không tìm thấy khu vực",
+        message:
+          "Không tìm thấy khu vực",
       });
     }
 
-    const tableCount = await Table.count({
-      where: {
-        area_id: areaId,
-      },
-    });
+    /**
+     * Không cho xóa area nếu
+     * vẫn còn bàn.
+     */
+    const tableCount =
+      await Table.count({
+        where: {
+          area_id: areaId,
+        },
+      });
 
     if (tableCount > 0) {
       return res.status(400).json({
@@ -718,13 +1050,125 @@ export const deleteArea = async (req: Request, res: Response) => {
     await area.destroy();
 
     return res.status(200).json({
-      message: "Xóa khu vực thành công",
+      message:
+        "Xóa khu vực thành công",
     });
-  } catch (err) {
-    console.error("DELETE AREA ERROR:", err);
+  } catch (error) {
+    console.error(
+      "DELETE AREA ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message: "Không thể xóa khu vực",
+      message:
+        "Không thể xóa khu vực",
+    });
+  }
+};
+
+/**
+ * =========================================================
+ * ASSIGN STAFF TO BRANCH
+ * =========================================================
+ *
+ * Chức năng này chỉ dành cho:
+ * - admin
+ * - chain_manager
+ *
+ * Router phải bảo vệ bằng requireChainManager.
+ */
+export const assignStaff = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const branchId = Number(
+      req.params.id
+    );
+
+    const userId = Number(
+      req.body.user_id
+    );
+
+    if (!Number.isInteger(branchId)) {
+      return res.status(400).json({
+        message:
+          "ID chi nhánh không hợp lệ",
+      });
+    }
+
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({
+        message:
+          "user_id không hợp lệ",
+      });
+    }
+
+    const [branch, user] =
+      await Promise.all([
+        Branch.findByPk(branchId),
+        User.findByPk(userId),
+      ]);
+
+    if (!branch || !user) {
+      return res.status(404).json({
+        message:
+          "Không tìm thấy chi nhánh hoặc nhân viên",
+      });
+    }
+
+    const isPrimary =
+      Boolean(req.body.is_primary);
+
+    const [
+      assignment,
+      created,
+    ] = await StaffBranch.findOrCreate({
+      where: {
+        branch_id: branchId,
+        user_id: userId,
+      },
+
+      defaults: {
+        branch_id: branchId,
+        user_id: userId,
+        is_primary: isPrimary,
+        is_active: true,
+      },
+    });
+
+    /**
+     * Nếu assignment đã tồn tại
+     * thì cập nhật.
+     */
+    if (!created) {
+      await assignment.update({
+        is_primary: isPrimary,
+
+        is_active:
+          req.body.is_active !==
+          undefined
+            ? Boolean(
+                req.body.is_active
+              )
+            : true,
+      });
+    }
+
+    return res.status(
+      created ? 201 : 200
+    ).json({
+      data: assignment,
+    });
+  } catch (error) {
+    console.error(
+      "ASSIGN STAFF ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      message:
+        "Không thể phân công nhân viên",
     });
   }
 };

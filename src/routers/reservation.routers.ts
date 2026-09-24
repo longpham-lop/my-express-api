@@ -1,105 +1,151 @@
 import { Router } from "express";
 
 import {
-  getMyReservations,
+  checkReservationAvailability,
   createReservation,
-  cancelReservation,
+  getMyReservations,
   getAllReservationsAdmin,
   getReservationById,
   updateReservation,
   deleteReservation,
+  confirmReservation,
+  checkInReservation,
+  completeReservation,
+  cancelReservation,
+  requestReservationOtp,
+  createOnlineReservation,
 } from "../controllers/ReservationController";
 
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { requireRole } from "../middlewares/role.middleware";
-import { requireBranchManager } from "../middlewares/permission.middleware";
-
-import {
-  checkAvailability,
-  createOnlineReservation,
-  createPhoneReservation,
-  requestReservationOtp,
-} from "../controllers/ReservationPhase2Controller";
 
 const router = Router();
 
 /*
-|--------------------------------------------------------------------------
-| PUBLIC RESERVATION
-|--------------------------------------------------------------------------
-*/
+ * =========================================================
+ * CUSTOMER / USER
+ * =========================================================
+ */
+router.post(
+  "/availability",
+  checkReservationAvailability
+);
 
-router.post("/availability", checkAvailability);
-
-router.post("/otp/request", requestReservationOtp);
-
-router.post("/online", createOnlineReservation);
+// Tạo đặt bàn
+router.post(
+  "/",
+  createReservation
+);
+router.post(
+  "/otp/request",
+  requestReservationOtp
+);
 
 router.post(
-  "/phone",
+  "/online",
+  createOnlineReservation
+);
+// Xem đặt bàn của chính mình
+router.get(
+  "/my",
   authMiddleware,
-  requireBranchManager,
-  createPhoneReservation
+  getMyReservations
 );
 
 /*
-|--------------------------------------------------------------------------
-| ADMIN / MANAGEMENT
-|--------------------------------------------------------------------------
-*/
+ * =========================================================
+ * ADMIN
+ * =========================================================
+ */
 
-// Admin + chain_manager + branch_manager
+// Danh sách tất cả reservation
 router.get(
   "/admin",
   authMiddleware,
-  requireRole("admin", "chain_manager", "branch_manager"),
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
   getAllReservationsAdmin
 );
 
-/*
-|--------------------------------------------------------------------------
-| USER
-|--------------------------------------------------------------------------
-*/
+// Chi tiết
+router.get(
+  "/:id",
+  authMiddleware,
+  getReservationById
+);
 
-router.get("/", authMiddleware, getMyReservations);
+// Cập nhật thông tin
+router.put(
+  "/:id",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  updateReservation
+);
 
-/*
-|--------------------------------------------------------------------------
-| CREATE
-|--------------------------------------------------------------------------
-*/
+// Xác nhận
+router.put(
+  "/:id/confirm",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  confirmReservation
+);
 
-router.post("/", createReservation);
+// Check-in
+router.put(
+  "/:id/check-in",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  checkInReservation
+);
 
-/*
-|--------------------------------------------------------------------------
-| UPDATE / CANCEL
-|--------------------------------------------------------------------------
-*/
+// Hoàn tất
+router.put(
+  "/:id/complete",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  completeReservation
+);
 
-router.put("/:id/cancel", authMiddleware, cancelReservation);
+// Hủy
+router.put(
+  "/:id/cancel",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  cancelReservation
+);
 
-router.put("/:id", authMiddleware, updateReservation);
-
-/*
-|--------------------------------------------------------------------------
-| GET BY ID
-|--------------------------------------------------------------------------
-*/
-
-router.get("/:id", authMiddleware, getReservationById);
-
-/*
-|--------------------------------------------------------------------------
-| DELETE
-|--------------------------------------------------------------------------
-*/
-
+// Xóa
 router.delete(
   "/:id",
   authMiddleware,
-  requireRole("admin", "chain_manager", "branch_manager"),
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
   deleteReservation
 );
 

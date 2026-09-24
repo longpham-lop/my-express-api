@@ -5,66 +5,131 @@ import {
   createArea,
   createBranch,
   listAreas,
-  listBranches,
   listPublicBranches,
-  updateBranch,
+  listBranches,
   updateArea,
   deleteArea,
+  updateBranch,
   updateBranchSettings,
 } from "../controllers/BranchController";
 
 import { authMiddleware } from "../middlewares/auth.middleware";
-import { requireChainManager } from "../middlewares/permission.middleware";
 import { requireRole } from "../middlewares/role.middleware";
+import { requireChainManager } from "../middlewares/permission.middleware";
 
 const router = Router();
 
-/**
- * PUBLIC
- * Không cần đăng nhập
- */
-router.get("/public", listPublicBranches);
+/*
+=====================================================
+PUBLIC
+=====================================================
+*/
 
-/**
- * GET BRANCHES
- *
- * Admin:
- *      xem tất cả chi nhánh
- *
- * Chain manager:
- *      xem tất cả chi nhánh
- *
- * Branch manager:
- *      chỉ xem chi nhánh của mình
- */
+router.get(
+  "/public",
+  listPublicBranches
+);
+
+/*
+=====================================================
+XEM DANH SÁCH CHI NHÁNH
+=====================================================
+*/
+
 router.get(
   "/",
   authMiddleware,
-  requireRole("admin", "chain_manager", "branch_manager"),
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
   listBranches
 );
 
-/**
- * Các chức năng quản lý chi nhánh
- *
- * Chỉ Admin / Chain Manager
- */
-router.use(authMiddleware, requireChainManager);
+/*
+=====================================================
+QUẢN LÝ KHU VỰC
+admin
+chain_manager
+branch_manager
+=====================================================
+*/
 
-router.post("/", createBranch);
+router.get(
+  "/:id/areas",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  listAreas
+);
 
-router.put("/:id", updateBranch);
+router.post(
+  "/:id/areas",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  createArea
+);
 
-router.put("/:id/settings", updateBranchSettings);
+router.put(
+  "/:id/areas/:areaId",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  updateArea
+);
 
-router.get("/:id/areas", listAreas);
+router.delete(
+  "/:id/areas/:areaId",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager"
+  ),
+  deleteArea
+);
 
-router.post("/:id/areas", createArea);
+/*
+=====================================================
+QUẢN LÝ CHI NHÁNH
+CHỈ ADMIN + CHAIN MANAGER
+=====================================================
+*/
 
-router.put("/:id/areas/:areaId", updateArea);
+router.use(
+  authMiddleware,
+  requireChainManager
+);
 
-router.delete("/:id/areas/:areaId", deleteArea);
+router.post(
+  "/",
+  createBranch
+);
 
-router.put("/:id/staff", assignStaff);
+router.put(
+  "/:id",
+  updateBranch
+);
+
+router.put(
+  "/:id/settings",
+  updateBranchSettings
+);
+
+router.put(
+  "/:id/staff",
+  assignStaff
+);
 
 export default router;

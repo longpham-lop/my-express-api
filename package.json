@@ -7,8 +7,8 @@
     "start": "node dist/indexs.js",
     "build": "tsc",
     "serve": "node dist/indexs.js",
-    "dev": "nodemon --watch src --ext ts --exec ts-node -r tsconfig-paths/register src/indexs.ts"
-    ,"backfill:single-branch": "ts-node -r tsconfig-paths/register src/scripts/backfill-single-branch.ts"
+    "dev": "nodemon --watch src --ext ts --exec ts-node -r tsconfig-paths/register src/indexs.ts",
+    "backfill:single-branch": "ts-node -r tsconfig-paths/register src/scripts/backfill-single-branch.ts"
   },
   "author": "",
   "license": "ISC",
@@ -32,6 +32,7 @@
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
     "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
     "cloudinary": "^2.9.0",
     "cors": "^2.8.6",

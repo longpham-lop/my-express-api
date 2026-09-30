@@ -1,42 +1,95 @@
-// models/Order.ts
-import { DataTypes, Model } from "sequelize";
+import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
 
-// 1️⃣ Khai báo interface cho các field
+export type OrderStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "cancelled";
+
 export interface OrderAttributes {
   id?: number;
   branch_id?: number | null;
-  user_id?: number;
+  user_id?: number | null;
   reservation_id?: number | null;
   total_price: number;
-  status?: string;
+  status?: OrderStatus;
   is_deleted?: boolean;
 }
 
-// 2️⃣ Tạo class Model chuẩn
-class Order extends Model<OrderAttributes> implements OrderAttributes {
+type OrderCreationAttributes = Optional<
+  OrderAttributes,
+  "id" | "branch_id" | "user_id" | "reservation_id" | "status" | "is_deleted"
+>;
+
+class Order
+  extends Model<OrderAttributes, OrderCreationAttributes>
+  implements OrderAttributes
+{
   public id!: number;
+
   public branch_id?: number | null;
-  public user_id!: number;
-  public reservation_id!: number | null;
+
+  public user_id?: number | null;
+
+  public reservation_id?: number | null;
+
   public total_price!: number;
-  public status!: string;
+
+  public status!: OrderStatus;
+
   public is_deleted!: boolean;
 
   public readonly createdAt!: Date;
+
   public readonly updatedAt!: Date;
 }
 
-// 3️⃣ Khởi tạo model với init
 Order.init(
   {
-    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    branch_id: { type: DataTypes.INTEGER, allowNull: true },
-    user_id: { type: DataTypes.INTEGER, allowNull: true },
-    reservation_id: { type: DataTypes.INTEGER, allowNull: true },
-    total_price: { type: DataTypes.FLOAT, allowNull: false },
-    status: { type: DataTypes.STRING, defaultValue: "pending" },
-    is_deleted: { type: DataTypes.BOOLEAN, defaultValue: false },
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    branch_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+
+    reservation_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+
+    total_price: {
+      type: DataTypes.FLOAT,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    status: {
+      type: DataTypes.ENUM(
+        "pending",
+        "processing",
+        "completed",
+        "cancelled"
+      ),
+      allowNull: false,
+      defaultValue: "pending",
+    },
+
+    is_deleted: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
   },
   {
     sequelize,
@@ -44,8 +97,5 @@ Order.init(
     timestamps: true,
   }
 );
-
-// 4️⃣ Quan hệ
-// OrderModel.hasMany(OrderItem, {foreignKey: "order_id", as: "items",});
 
 export default Order;

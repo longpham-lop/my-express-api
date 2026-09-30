@@ -448,6 +448,7 @@ export const createOnlineReservation = async (
       note,
       otp_request_id,
       otp_code,
+      cart,
     } = req.body as {
       branch_id?: number;
       table_id?: number;
@@ -459,6 +460,7 @@ export const createOnlineReservation = async (
       note?: string;
       otp_request_id?: number;
       otp_code?: string;
+      cart?: CartItem[];
     };
 
     const branchId = Number(branch_id);
@@ -755,7 +757,55 @@ export const createOnlineReservation = async (
         guest_count: guestCount,
         status: "pending",
       });
+    /* =====================================================
+   13. TẠO ORDER NẾU CÓ CART
+===================================================== */
 
+    let order: Order | null = null;
+
+    if (Array.isArray(cart) && cart.length > 0) {
+      const validCart = cart.filter((item) => {
+        const price = Number(item.price);
+        const quantity = Number(item.quantity);
+        const menuItemId = Number(item.id);
+
+        return (
+          Number.isFinite(price) &&
+          price >= 0 &&
+          Number.isFinite(quantity) &&
+          quantity > 0 &&
+          Number.isInteger(menuItemId) &&
+          menuItemId > 0
+        );
+      });
+
+      if (validCart.length > 0) {
+        const total = validCart.reduce(
+          (sum, item) =>
+            sum +
+            Number(item.price) * Number(item.quantity),
+          0
+        );
+
+        order = await Order.create({
+          branch_id: reservation.branch_id,
+          reservation_id: reservation.id,
+          user_id: req.user?.id ?? null,
+          total_price: total,
+          status: "pending",
+          is_deleted: false,
+        });
+
+        await OrderItem.bulkCreate(
+          validCart.map((item) => ({
+            order_id: order!.id,
+            menu_item_id: Number(item.id),
+            quantity: Number(item.quantity),
+            unit_price: Number(item.price),
+          }))
+        );
+      }
+    }
     /*
      * =====================================================
      * 13. REALTIME
@@ -841,6 +891,7 @@ Vui lòng đến đúng giờ và báo tên hoặc số điện thoại cho nhâ
         "Xác nhận đặt bàn thành công",
       data: {
         reservation,
+        order,
         notificationStatus,
       },
     });
@@ -1043,11 +1094,12 @@ export const createReservation = async (
       );
 
       order = await Order.create({
-        branch_id: table.branch_id,
+        branch_id: reservation.branch_id,
         reservation_id: reservation.id,
-        user_id: userId,
+        user_id: userId ?? undefined,
         total_price: total,
         status: "pending",
+        is_deleted: false,
       });
 
       const orderItems = cart.map(

@@ -55,7 +55,7 @@ export const createPayment = async (req: Request, res: Response) => {
 
     // update order
     await order.update({
-      status: "paid",
+      status: "completed",
     });
 
     return res.status(201).json({

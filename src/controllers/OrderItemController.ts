@@ -11,12 +11,32 @@ const updateOrderTotal = async (order_id: number) => {
   });
 
   const total_price = items.reduce(
-    (sum, i: any) => sum + i.unit_price * i.quantity,
+    (sum, item) =>
+      sum + Number(item.unit_price) * Number(item.quantity),
     0
   );
 
-  await Order.update({ total_price }, { where: { id: order_id } });
+  await Order.update(
+    { total_price },
+    { where: { id: order_id } }
+  );
 };
+
+const ALLOWED_ROLES = [
+  "admin",
+  "chain_manager",
+  "branch_manager",
+  "kitchen",
+  "waiter",
+];
+
+const STATUS_LIST = [
+  "pending",
+  "cooking",
+  "ready",
+  "served",
+  "cancelled",
+] as const;
 
 /* ================= GET MY ITEMS ================= */
 export const getMyOrderItems = async (req: AuthRequest, res: Response) => {
@@ -162,5 +182,87 @@ export const deleteOrderItem = async (req: AuthRequest, res: Response) => {
 
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+export const updateOrderItemStatus = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    if (!ALLOWED_ROLES.includes(req.user.role)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền cập nhật món",
+      });
+    }
+
+    const itemId = Number(req.params.id);
+
+    if (!Number.isInteger(itemId)) {
+      return res.status(400).json({
+        message: "ID món không hợp lệ",
+      });
+    }
+
+    const { status } = req.body;
+
+    if (!STATUS_LIST.includes(status)) {
+      return res.status(400).json({
+        message: "Trạng thái món không hợp lệ",
+      });
+    }
+
+    const item = await OrderItem.findByPk(itemId);
+
+    if (!item) {
+      return res.status(404).json({
+        message: "OrderItem không tồn tại",
+      });
+    }
+
+    const order = await Order.findByPk(item.order_id);
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Order không tồn tại",
+      });
+    }
+
+    // Branch manager / kitchen / waiter chỉ được thao tác
+    // trên đơn thuộc chi nhánh của mình
+    if (
+      req.user.role !== "admin" &&
+      req.user.role !== "chain_manager"
+    ) {
+      if (
+        req.user.branchId === null ||
+        req.user.branchId !== order.branch_id
+      ) {
+        return res.status(403).json({
+          message: "Bạn không có quyền thao tác đơn của chi nhánh này",
+        });
+      }
+    }
+
+    await item.update({
+      status,
+    });
+
+    return res.status(200).json({
+      message: "Cập nhật trạng thái món thành công",
+      data: item,
+    });
+  } catch (error) {
+    console.error("UPDATE ORDER ITEM STATUS ERROR:", error);
+
+    return res.status(500).json({
+      message: "Không thể cập nhật trạng thái món",
+    });
   }
 };

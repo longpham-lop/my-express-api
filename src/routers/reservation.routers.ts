@@ -65,7 +65,8 @@ router.get(
   requireRole(
     "admin",
     "chain_manager",
-    "branch_manager"
+    "branch_manager",
+    "waiter"
   ),
   getAllReservationsAdmin
 );

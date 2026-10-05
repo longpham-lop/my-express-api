@@ -151,59 +151,51 @@ export const listBranches = async (
       });
     }
 
-    const role = req.user.role;
-    const branchId = req.user.branchId;
+    const whereCondition: {
+      id?: number;
+    } = {};
 
     /**
-     * Branch Manager phải được gán branch.
+     * Branch Manager / Waiter:
+     * chỉ được xem chi nhánh của mình
      */
     if (
-      isBranchManager(role) &&
-      !branchId
+      req.user.role === "branch_manager" ||
+      req.user.role === "waiter"
     ) {
-      return res.status(403).json({
-        message:
-          "Tài khoản Branch Manager chưa được gán chi nhánh",
-      });
+      if (!req.user.branchId) {
+        return res.status(403).json({
+          message: "Tài khoản chưa được gán chi nhánh",
+        });
+      }
+
+      whereCondition.id = req.user.branchId;
     }
 
     /**
      * Admin / Chain Manager:
-     * lấy tất cả branch.
-     *
-     * Branch Manager:
-     * chỉ lấy branch của mình.
+     * không set whereCondition
+     * => xem tất cả chi nhánh
      */
-    const where = isBranchManager(role)
-      ? {
-          id: branchId!,
-        }
-      : undefined;
-
     const branches = await Branch.findAll({
-      where,
-
+      where: whereCondition,
       include: [
         {
           model: BranchSetting,
           as: "settings",
         },
       ],
-
-      order: [["name", "ASC"]],
+      order: [["id", "ASC"]],
     });
 
     return res.status(200).json({
       data: branches,
     });
   } catch (error) {
-    console.error(
-      "LIST BRANCHES ERROR:",
-      error
-    );
+    console.error("LIST BRANCHES ERROR:", error);
 
     return res.status(500).json({
-      message: "Không thể tải danh sách chi nhánh",
+      message: "Không thể lấy danh sách chi nhánh",
     });
   }
 };
@@ -552,78 +544,67 @@ export const listAreas = async (
   res: Response
 ) => {
   try {
-    const branchId = Number(
-      req.params.id
-    );
-
-    if (!Number.isInteger(branchId)) {
-      return res.status(400).json({
-        message:
-          "branch_id không hợp lệ",
-      });
-    }
-
     if (!req.user) {
       return res.status(401).json({
         message: "Chưa đăng nhập",
       });
     }
 
-    /**
-     * Kiểm tra quyền branch.
-     */
-    if (
-      !canAccessBranch(
-        req,
-        branchId
-      )
-    ) {
-      return res.status(403).json({
-        message:
-          "Bạn không có quyền truy cập chi nhánh này",
+    const branchId = Number(req.params.id);
+
+    if (!Number.isInteger(branchId)) {
+      return res.status(400).json({
+        message: "Chi nhánh không hợp lệ",
       });
     }
 
-    /**
-     * Kiểm tra branch tồn tại.
-     */
-    const branch =
-      await Branch.findByPk(branchId);
+    const globalRoles = ["admin", "chain_manager"];
+    const branchRoles = ["branch_manager", "waiter"];
 
-    if (!branch) {
-      return res.status(404).json({
-        message:
-          "Không tìm thấy chi nhánh",
-      });
-    }
-
-    /**
-     * Lấy danh sách khu vực.
-     */
-    const areas =
-      await TableArea.findAll({
+    // Admin / chain_manager được xem mọi chi nhánh
+    if (globalRoles.includes(req.user.role)) {
+      const areas = await TableArea.findAll({
         where: {
           branch_id: branchId,
         },
-
-        order: [
-          ["sort_order", "ASC"],
-          ["name", "ASC"],
-        ],
+        order: [["id", "ASC"]],
       });
 
-    return res.status(200).json({
-      data: areas,
+      return res.json(areas);
+    }
+
+    // branch_manager / waiter chỉ được xem chi nhánh của mình
+    if (branchRoles.includes(req.user.role)) {
+      if (!req.user.branchId) {
+        return res.status(403).json({
+          message: "Tài khoản chưa được gán chi nhánh",
+        });
+      }
+
+      if (req.user.branchId !== branchId) {
+        return res.status(403).json({
+          message: "Bạn không có quyền xem khu vực của chi nhánh khác",
+        });
+      }
+
+      const areas = await TableArea.findAll({
+        where: {
+          branch_id: req.user.branchId,
+        },
+        order: [["id", "ASC"]],
+      });
+
+      return res.json(areas);
+    }
+
+    return res.status(403).json({
+      message: "Bạn không có quyền xem khu vực",
     });
-  } catch (error) {
-    console.error(
-      "LIST AREAS ERROR:",
-      error
-    );
+  } catch (err) {
+    console.error("LIST AREAS ERROR:", err);
 
     return res.status(500).json({
-      message:
-        "Không thể tải danh sách khu vực",
+      message: "Không thể lấy danh sách khu vực",
     });
   }
 };

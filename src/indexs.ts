@@ -25,6 +25,7 @@ import contactRouter from './routers/contact.routers';
 import branchRouter from './routers/branch.routers';
 import roleRouter from './routers/role.routers';
 import Role from './models/Role';
+import kitchenRouter from './routers/kitchen.routers';
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ app.use('/api', uploadRoutes);
 app.use('/api/contact', contactRouter);
 app.use('/api/branches', branchRouter);
 app.use('/api/roles', roleRouter);
+app.use('/api/kitchen', kitchenRouter);
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);

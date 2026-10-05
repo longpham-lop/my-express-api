@@ -34,6 +34,8 @@ class OrderItem
   public quantity!: number;
 
   public unit_price!: number;
+  
+  public status!: OrderItemStatus;
 
   public readonly createdAt!: Date;
 

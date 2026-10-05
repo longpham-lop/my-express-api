@@ -459,30 +459,74 @@ export const createOrder = async (
 /**
  * PUT /api/orders/:id/status
  */
+/**
+ * PUT /api/orders/:id/status
+ *
+ * Quy tắc:
+ *
+ * pending
+ *   ↓
+ * processing
+ *   ↓
+ * completed
+ *
+ * Không được completed nếu còn món:
+ * - pending
+ * - cooking
+ * - ready
+ *
+ * Món chỉ được xem là hoàn tất khi:
+ * - served
+ * - cancelled
+ */
 export const updateOrderStatus = async (
   req: AuthRequest,
   res: Response
 ) => {
   try {
+    /*
+     * =====================================================
+     * 1. KIỂM TRA ĐĂNG NHẬP
+     * =====================================================
+     */
+
     if (!req.user) {
       return res.status(401).json({
         message: "Chưa đăng nhập",
       });
     }
 
+    /*
+     * =====================================================
+     * 2. KIỂM TRA ID
+     * =====================================================
+     */
+
     const id = Number(req.params.id);
 
-    if (isNaN(id)) {
+    if (!Number.isInteger(id)) {
       return res.status(400).json({
         message: "ID không hợp lệ",
       });
     }
+
+    /*
+     * =====================================================
+     * 3. KIỂM TRA QUYỀN
+     * =====================================================
+     */
 
     if (!canManageOrders(req.user.role)) {
       return res.status(403).json({
         message: "Bạn không có quyền cập nhật order",
       });
     }
+
+    /*
+     * =====================================================
+     * 4. KIỂM TRA STATUS
+     * =====================================================
+     */
 
     const { status } = req.body;
 
@@ -491,13 +535,19 @@ export const updateOrderStatus = async (
       "processing",
       "completed",
       "cancelled",
-    ];
+    ] as const;
 
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
         message: "Trạng thái order không hợp lệ",
       });
     }
+
+    /*
+     * =====================================================
+     * 5. TÌM ORDER
+     * =====================================================
+     */
 
     const order = await Order.findByPk(id);
 
@@ -507,10 +557,12 @@ export const updateOrderStatus = async (
       });
     }
 
-    /**
-     * Branch Manager / Waiter / Cashier
-     * chỉ được cập nhật order trong branch mình.
+    /*
+     * =====================================================
+     * 6. KIỂM TRA CHI NHÁNH
+     * =====================================================
      */
+
     if (
       !canAccessBranch(
         req.user.role,
@@ -524,13 +576,88 @@ export const updateOrderStatus = async (
       });
     }
 
+    /*
+     * =====================================================
+     * 7. KHÔNG CHO HOÀN THÀNH ORDER KHI MÓN CHƯA XONG
+     * =====================================================
+     *
+     * Đây là phần quan trọng nhất.
+     *
+     * Phải kiểm tra TRƯỚC khi order.update().
+     */
+
+    if (status === "completed") {
+      const items = await OrderItem.findAll({
+        where: {
+          order_id: order.id,
+        },
+      });
+
+      /*
+      * Order phải có ít nhất 1 món
+      */
+      if (items.length === 0) {
+        return res.status(400).json({
+          message:
+            "Không thể hoàn thành đơn hàng khi đơn chưa có món",
+        });
+      }
+
+      /*
+      * Nếu tất cả món đều bị hủy
+      * thì Order phải là cancelled,
+      * không được chuyển completed.
+      */
+      const allCancelled = items.every(
+        (item) => item.status === "cancelled"
+      );
+
+      if (allCancelled) {
+        return res.status(400).json({
+          message:
+            "Không thể hoàn thành đơn hàng vì tất cả món đều đã bị hủy",
+        });
+      }
+
+      /*
+      * Tìm món chưa hoàn thành.
+      *
+      * Chỉ:
+      * - served
+      * - cancelled
+      *
+      * mới được coi là hoàn tất.
+      */
+      const unfinishedItems = items.filter(
+        (item) =>
+          item.status !== "served" &&
+          item.status !== "cancelled"
+      );
+
+      if (unfinishedItems.length > 0) {
+        return res.status(400).json({
+          message:
+            "Không thể hoàn thành đơn khi vẫn còn món chưa phục vụ",
+        });
+      }
+    }
+
+    /*
+     * =====================================================
+     * 8. CẬP NHẬT ORDER
+     * =====================================================
+     */
+
     await order.update({
       status,
     });
 
-    /**
-     * Đồng bộ Reservation
+    /*
+     * =====================================================
+     * 9. ĐỒNG BỘ RESERVATION
+     * =====================================================
      */
+
     if (order.reservation_id) {
       const reservation =
         await Reservation.findByPk(
@@ -541,14 +668,23 @@ export const updateOrderStatus = async (
         let reservationStatus =
           reservation.status;
 
+        /*
+         * Order bắt đầu xử lý
+         */
         if (status === "processing") {
           reservationStatus = "confirmed";
         }
 
+        /*
+         * Order hoàn thành
+         */
         if (status === "completed") {
           reservationStatus = "completed";
         }
 
+        /*
+         * Order bị hủy
+         */
         if (status === "cancelled") {
           reservationStatus = "cancelled";
         }
@@ -556,25 +692,45 @@ export const updateOrderStatus = async (
         await reservation.update({
           status: reservationStatus,
         });
+      }
+    }
 
-        /**
-         * Khi order hoàn tất,
-         * trả bàn về available.
-         */
-        if (status === "completed") {
-          const table =
-            await TableModel.findByPk(
-              reservation.table_id
-            );
+    /*
+     * =====================================================
+     * 10. TRẢ BÀN VỀ AVAILABLE
+     * =====================================================
+     *
+     * Chỉ xử lý khi Order hoàn thành.
+     */
 
-          if (table) {
-            await table.update({
-              status: "available",
-            });
-          }
+    if (
+      status === "completed" &&
+      order.reservation_id
+    ) {
+      const reservation =
+        await Reservation.findByPk(
+          order.reservation_id
+        );
+
+      if (reservation && reservation.table_id) {
+        const table =
+          await TableModel.findByPk(
+            reservation.table_id
+          );
+
+        if (table) {
+          await table.update({
+            status: "available",
+          });
         }
       }
     }
+
+    /*
+     * =====================================================
+     * 11. RESPONSE
+     * =====================================================
+     */
 
     return res.json({
       message: "Cập nhật order thành công",

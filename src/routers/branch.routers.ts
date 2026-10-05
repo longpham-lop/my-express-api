@@ -42,9 +42,32 @@ router.get(
   requireRole(
     "admin",
     "chain_manager",
-    "branch_manager"
+    "branch_manager",
+    "waiter"
   ),
   listBranches
+);
+
+/*
+=====================================================
+XEM KHU VỰC
+admin
+chain_manager
+branch_manager
+waiter
+=====================================================
+*/
+
+router.get(
+  "/:id/areas",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager",
+    "waiter"
+  ),
+  listAreas
 );
 
 /*
@@ -55,17 +78,6 @@ chain_manager
 branch_manager
 =====================================================
 */
-
-router.get(
-  "/:id/areas",
-  authMiddleware,
-  requireRole(
-    "admin",
-    "chain_manager",
-    "branch_manager"
-  ),
-  listAreas
-);
 
 router.post(
   "/:id/areas",

@@ -1296,6 +1296,7 @@ export const getAllReservationsAdmin = async (
       "admin",
       "chain_manager",
       "branch_manager",
+      "waiter",
     ];
 
     if (!allowedRoles.includes(role)) {
@@ -1310,7 +1311,7 @@ export const getAllReservationsAdmin = async (
     // =====================================================
 
     if (
-      role === "branch_manager" &&
+      (role === "branch_manager" || role === "waiter") &&
       !branchId
     ) {
       return res.status(403).json({
@@ -1346,7 +1347,7 @@ export const getAllReservationsAdmin = async (
     // -----------------------------------------------------
 
     if (
-      role === "branch_manager"
+      role === "branch_manager" || role ==="waiter"
     ) {
       where.branch_id =
         branchId as number;

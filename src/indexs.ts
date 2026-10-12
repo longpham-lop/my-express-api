@@ -26,6 +26,11 @@ import branchRouter from './routers/branch.routers';
 import roleRouter from './routers/role.routers';
 import Role from './models/Role';
 import kitchenRouter from './routers/kitchen.routers';
+import ingredientRouter from './routers/ingredient.routers';
+import RecipeRouter from './routers/recipe.routers';
+import inventoryRouter from './routers/inventory.routers';
+import purchaseRouter from './routers/purchase.routers';
+import inventoryTransactionRouter from './routers/inventoryTransaction.routers';
 
 dotenv.config();
 
@@ -59,6 +64,12 @@ app.use('/api/contact', contactRouter);
 app.use('/api/branches', branchRouter);
 app.use('/api/roles', roleRouter);
 app.use('/api/kitchen', kitchenRouter);
+app.use('/api/ingredients', ingredientRouter);
+app.use('/api/recipes', RecipeRouter);
+app.use('/api/inventory', inventoryRouter);
+app.use('/api/inventory-transactions',inventoryTransactionRouter);
+app.use('/api/purchases', purchaseRouter);
+
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);

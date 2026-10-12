@@ -14,6 +14,12 @@ import TableArea from "./TableArea";
 import StaffBranch from "./StaffBranch";
 import Customer from "./Customer";
 import OtpRequest from "./OtpRequest";
+import Ingredient from "./Ingredient";
+import RecipeItem from "./RecipeItem";
+import BranchInventory from "./BranchInventory";
+import Purchase from "./Purchase";
+import PurchaseItem from "./PurchaseItem";
+import InventoryTransaction from "./InventoryTransaction";
 
 Role.hasMany(User, { foreignKey: "role_id", as: "users" });
 User.belongsTo(Role, { foreignKey: "role_id", as: "role" });
@@ -24,6 +30,25 @@ BranchSetting.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 Branch.hasMany(TableArea, { foreignKey: "branch_id", as: "areas" });
 TableArea.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 Branch.hasMany(Table, { foreignKey: "branch_id", as: "tables" });
+Branch.hasMany(BranchInventory, {
+  foreignKey: "branch_id",
+  as: "inventory",
+});
+
+BranchInventory.belongsTo(Branch, {
+  foreignKey: "branch_id",
+  as: "branch",
+});
+
+Ingredient.hasMany(BranchInventory, {
+  foreignKey: "ingredient_id",
+  as: "inventory",
+});
+
+BranchInventory.belongsTo(Ingredient, {
+  foreignKey: "ingredient_id",
+  as: "ingredient",
+});
 Table.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 TableArea.hasMany(Table, { foreignKey: "area_id", as: "tables" });
 Table.belongsTo(TableArea, { foreignKey: "area_id", as: "area" });
@@ -33,6 +58,76 @@ Branch.hasMany(Category, { foreignKey: "branch_id", as: "categories" });
 Category.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 Branch.hasMany(Reservation, { foreignKey: "branch_id", as: "reservations" });
 // Reservation cũ đã có cột `branch` dạng text; dùng alias khác để không va chạm.
+Branch.hasMany(Purchase, {
+  foreignKey: "branch_id",
+  as: "purchases",
+});
+
+Purchase.belongsTo(Branch, {
+  foreignKey: "branch_id",
+  as: "branch",
+});
+
+Purchase.belongsTo(User, {
+  foreignKey: "created_by",
+  as: "creator",
+});
+
+User.hasMany(Purchase, {
+  foreignKey: "created_by",
+  as: "purchases",
+});
+
+Purchase.hasMany(PurchaseItem, {
+  foreignKey: "purchase_id",
+  as: "items",
+});
+
+PurchaseItem.belongsTo(Purchase, {
+  foreignKey: "purchase_id",
+  as: "purchase",
+});
+
+PurchaseItem.belongsTo(Ingredient, {
+  foreignKey: "ingredient_id",
+  as: "ingredient",
+});
+
+Ingredient.hasMany(PurchaseItem, {
+  foreignKey: "ingredient_id",
+  as: "purchaseItems",
+});
+Branch.hasMany(InventoryTransaction, {
+  foreignKey: "branch_id",
+  as: "inventoryTransactions",
+});
+
+InventoryTransaction.belongsTo(Branch, {
+  foreignKey: "branch_id",
+  as: "branch",
+});
+
+
+Ingredient.hasMany(InventoryTransaction, {
+  foreignKey: "ingredient_id",
+  as: "inventoryTransactions",
+});
+
+InventoryTransaction.belongsTo(Ingredient, {
+  foreignKey: "ingredient_id",
+  as: "ingredient",
+});
+
+
+User.hasMany(InventoryTransaction, {
+  foreignKey: "created_by",
+  as: "inventoryTransactions",
+});
+
+InventoryTransaction.belongsTo(User, {
+  foreignKey: "created_by",
+  as: "creator",
+});
 Reservation.belongsTo(Branch, { foreignKey: "branch_id", as: "restaurantBranch" });
 Customer.hasMany(Reservation, { foreignKey: "customer_id", as: "reservations" });
 Reservation.belongsTo(Customer, { foreignKey: "customer_id", as: "customer" });
@@ -46,6 +141,25 @@ StaffBranch.belongsTo(Branch, { foreignKey: "branch_id", as: "branch" });
 Order.hasMany(OrderItem, { foreignKey: "order_id", as: "items" });
 OrderItem.belongsTo(Order, { foreignKey: "order_id" });
 OrderItem.belongsTo(Menu, { foreignKey: "menu_item_id", as: "menu" });
+RecipeItem.belongsTo(Menu, {
+  foreignKey: "menu_item_id",
+  as: "menu",
+});
+
+RecipeItem.belongsTo(Ingredient, {
+  foreignKey: "ingredient_id",
+  as: "ingredient",
+});
+
+Menu.hasMany(RecipeItem, {
+  foreignKey: "menu_item_id",
+  as: "recipes",
+});
+
+Ingredient.hasMany(RecipeItem, {
+  foreignKey: "ingredient_id",
+  as: "recipes",
+});
 Category.hasMany(Menu, { foreignKey: "category_id", as: "menuItems" });
 Menu.belongsTo(Category, { foreignKey: "category_id", as: "category" });
 Reservation.belongsTo(User, { foreignKey: "user_id" });
@@ -54,4 +168,4 @@ Order.belongsTo(User, { foreignKey: "user_id" });
 Order.belongsTo(Reservation, { foreignKey: "reservation_id" });
 Payment.belongsTo(Order, { foreignKey: "order_id" });
 
-export { sequelize, User, Role, Menu, Category, Order, OrderItem, Table, Reservation, Payment, Branch, BranchSetting, TableArea, StaffBranch, Customer, OtpRequest };
+export { sequelize, User, Role, Menu, Category, Order, OrderItem, Table, Reservation, Payment, Branch, BranchSetting, TableArea, StaffBranch, Customer, OtpRequest, Ingredient, RecipeItem, BranchInventory, Purchase, PurchaseItem, InventoryTransaction };

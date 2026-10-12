@@ -3,6 +3,12 @@ import { Response } from "express";
 import OrderItem from "../models/OrderItem";
 import Order from "../models/Order";
 import MenuItem from "../models/Menu";
+import sequelize from "../config/db";
+
+import {
+  consumeInventoryForOrderItem,
+  InventoryConsumptionError,
+} from "../services/InventoryConsumptionService";
 
 import { AuthRequest } from "../middlewares/auth.middleware";
 import { getIO } from "../socket";
@@ -672,131 +678,95 @@ export const updateOrderItemStatus = async (
   req: AuthRequest,
   res: Response
 ) => {
+  const transaction = await sequelize.transaction();
+
   try {
-    /*
-     * ===================================================
-     * 1. KIỂM TRA ĐĂNG NHẬP
-     * ===================================================
-     */
+    // =====================================================
+    // 1. KIỂM TRA ĐĂNG NHẬP
+    // =====================================================
 
     if (!req.user) {
+      await transaction.rollback();
+
       return res.status(401).json({
         message: "Chưa đăng nhập",
       });
     }
 
-    /*
-     * ===================================================
-     * 2. LẤY ID + STATUS
-     * ===================================================
-     */
+    // =====================================================
+    // 2. LẤY ID + STATUS
+    // =====================================================
 
-    const itemId = Number(
-      req.params.id
-    );
-
+    const itemId = Number(req.params.id);
     const { status } = req.body;
 
-    /*
-     * Kiểm tra ID
-     */
     if (!Number.isInteger(itemId)) {
+      await transaction.rollback();
+
       return res.status(400).json({
-        message:
-          "ID món không hợp lệ",
+        message: "ID món không hợp lệ",
       });
     }
 
-    /*
-     * Kiểm tra status
-     */
     if (!STATUS_LIST.includes(status)) {
+      await transaction.rollback();
+
       return res.status(400).json({
-        message:
-          "Trạng thái món không hợp lệ",
+        message: "Trạng thái món không hợp lệ",
       });
     }
 
-    /*
-     * ===================================================
-     * 3. KIỂM TRA ROLE
-     * ===================================================
-     */
+    // =====================================================
+    // 3. TÌM ORDER ITEM
+    // =====================================================
 
-    if (
-      !STATUS_ROLES.includes(
-        req.user.role
-      )
-    ) {
-      return res.status(403).json({
-        message:
-          "Bạn không có quyền cập nhật trạng thái món",
-      });
-    }
-
-    /*
-     * ===================================================
-     * 4. TÌM ORDER ITEM
-     * ===================================================
-     */
-
-    const item =
-      await OrderItem.findByPk(
-        itemId
-      );
+    const item = await OrderItem.findByPk(
+      itemId,
+      {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }
+    );
 
     if (!item) {
+      await transaction.rollback();
+
       return res.status(404).json({
-        message:
-          "OrderItem không tồn tại",
+        message: "OrderItem không tồn tại",
       });
     }
 
-    /*
-     * ===================================================
-     * 5. TÌM ORDER
-     * ===================================================
-     */
+    // =====================================================
+    // 4. TÌM ORDER
+    // =====================================================
 
-    const order =
-      await Order.findByPk(
-        item.order_id
-      );
+    const order = await Order.findByPk(
+      item.order_id,
+      {
+        transaction,
+      }
+    );
 
     if (!order) {
+      await transaction.rollback();
+
       return res.status(404).json({
-        message:
-          "Order không tồn tại",
+        message: "Order không tồn tại",
       });
     }
 
-    /*
-     * ===================================================
-     * 6. KIỂM TRA CHI NHÁNH
-     *
-     * Admin / Chain Manager:
-     *   toàn hệ thống
-     *
-     * Branch Manager:
-     *   chỉ branch của mình
-     *
-     * Kitchen / Waiter:
-     *   chỉ branch của mình
-     * ===================================================
-     */
+    // =====================================================
+    // 5. KIỂM TRA CHI NHÁNH
+    // =====================================================
 
     const isGlobalRole =
       req.user.role === "admin" ||
-      req.user.role ===
-        "chain_manager";
+      req.user.role === "chain_manager";
 
     if (!isGlobalRole) {
-      if (
-        req.user.branchId ===
-        null ||
-        req.user.branchId ===
-          undefined
-      ) {
+      if (req.user.branchId === null) {
+        await transaction.rollback();
+
         return res.status(403).json({
           message:
             "Tài khoản chưa được gán chi nhánh",
@@ -804,9 +774,10 @@ export const updateOrderItemStatus = async (
       }
 
       if (
-        req.user.branchId !==
-        order.branch_id
+        req.user.branchId !== order.branch_id
       ) {
+        await transaction.rollback();
+
         return res.status(403).json({
           message:
             "Bạn không có quyền thao tác đơn của chi nhánh này",
@@ -814,218 +785,283 @@ export const updateOrderItemStatus = async (
       }
     }
 
-    /*
-     * ===================================================
-     * 7. TRẠNG THÁI HIỆN TẠI
-     * ===================================================
-     */
+    // =====================================================
+    // 6. LẤY TRẠNG THÁI HIỆN TẠI
+    // =====================================================
 
-    const currentStatus =
-      item.status;
+    const currentStatus = item.status;
 
-    /*
-     * ===================================================
-     * 8. KITCHEN FLOW
-     *
-     * Chỉ role kitchen được xử lý bếp.
-     *
-     * pending → cooking
-     * cooking → ready
-     * ===================================================
-     */
+    // =====================================================
+    // 7. KITCHEN FLOW
+    // =====================================================
 
-    if (
-      req.user.role ===
-      "kitchen"
-    ) {
-      const validKitchenTransition =
-        (currentStatus ===
-          "pending" &&
-          status ===
-            "cooking") ||
-        (currentStatus ===
-          "cooking" &&
-          status ===
-            "ready");
-
-      if (
-        !validKitchenTransition
-      ) {
-        return res.status(403).json({
-          message:
-            "Nhân viên bếp chỉ được chuyển món từ Chờ chế biến → Đang chế biến → Đã làm xong",
-        });
-      }
-    }
-
-    /*
-     * ===================================================
-     * 9. WAITER FLOW
-     *
-     * ready → served
-     * ===================================================
-     */
-
-    if (
-      req.user.role ===
-      "waiter"
-    ) {
-      const validWaiterTransition =
-        currentStatus ===
-          "ready" &&
-        status === "served";
-
-      if (
-        !validWaiterTransition
-      ) {
-        return res.status(403).json({
-          message:
-            "Nhân viên phục vụ chỉ được chuyển món từ Đã làm xong → Đã phục vụ",
-        });
-      }
-    }
-
-    /*
-     * ===================================================
-     * 10. MANAGEMENT FLOW
-     *
-     * Admin
-     * Chain Manager
-     * Branch Manager
-     *
-     * ready → served
-     *
-     * pending → cancelled
-     * cooking → cancelled
-     * ready → cancelled
-     * ===================================================
-     */
-
-    const isManagementRole =
+    const canOperateKitchen =
+      req.user.role === "kitchen" ||
       req.user.role === "admin" ||
       req.user.role === "chain_manager" ||
       req.user.role === "branch_manager";
 
-    if (isManagementRole) {
-      const validManagementTransition =
-        // Luồng chính
-        (currentStatus === "pending" && status === "cooking") ||
-        (currentStatus === "cooking" && status === "ready") ||
-        (currentStatus === "ready" && status === "served") ||
+    if (canOperateKitchen) {
+      const validKitchenTransition =
+        (currentStatus === "pending" &&
+          status === "cooking") ||
+        (currentStatus === "cooking" &&
+          status === "ready");
 
-        // Hủy món
-        (currentStatus === "pending" && status === "cancelled") ||
-        (currentStatus === "cooking" && status === "cancelled") ||
-        (currentStatus === "ready" && status === "cancelled");
+      if (!validKitchenTransition) {
+        await transaction.rollback();
 
-      if (!validManagementTransition) {
         return res.status(403).json({
-          message: "Không thể chuyển trạng thái món theo bước này",
+          message:
+            "Bếp chỉ được chuyển món từ Chờ chế biến → Đang chế biến → Đã làm xong",
         });
       }
     }
 
-    /*
-     * ===================================================
-     * 11. CẬP NHẬT ORDER ITEM
-     * ===================================================
-     */
+    // =====================================================
+    // 8. WAITER FLOW
+    // =====================================================
 
-    await item.update({
-      status,
-    });
+    const canOperateServing =
+      req.user.role === "admin" ||
+      req.user.role === "chain_manager" ||
+      req.user.role === "branch_manager" ||
+      req.user.role === "waiter";
 
-    /*
-     * ===================================================
-     * 12. ĐỒNG BỘ ORDER
-     * ===================================================
-     */
+    if (canOperateServing) {
+      const validServingTransition =
+        currentStatus === "ready" &&
+        status === "served";
 
-    await syncOrderStatus(
-      order.id
+      if (!validServingTransition) {
+        await transaction.rollback();
+
+        return res.status(403).json({
+          message:
+            "Chỉ được chuyển món từ Đã làm xong → Đã phục vụ",
+        });
+      }
+    }
+
+    // =====================================================
+    // 9. ROLE KHÔNG CÓ QUYỀN
+    // =====================================================
+
+    else {
+      await transaction.rollback();
+
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền cập nhật trạng thái món",
+      });
+    }
+
+    // =====================================================
+    // 10. XUẤT KHO KHI READY → SERVED
+    // =====================================================
+    
+    if (
+      currentStatus === "ready" &&
+      status === "served"
+    ) {
+      if (order.branch_id === null || order.branch_id === undefined) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        message: "Đơn hàng chưa được gán chi nhánh",
+      });
+    }
+      await consumeInventoryForOrderItem(
+        {
+          orderItemId: item.id,
+
+          orderId: order.id,
+
+          branchId: order.branch_id,
+
+          menuItemId: item.menu_item_id,
+
+          orderItemQuantity:
+            Number(item.quantity),
+        },
+        transaction
+      );
+    }
+
+    // =====================================================
+    // 11. UPDATE ORDER ITEM
+    // =====================================================
+
+    await item.update(
+      {
+        status,
+      },
+      {
+        transaction,
+      }
     );
 
+    // =====================================================
+    // 12. ĐỒNG BỘ ORDER STATUS
+    // =====================================================
+
     /*
-     * ===================================================
-     * 13. REALTIME SOCKET
-     * ===================================================
+     * Lưu ý:
+     * syncOrderStatus hiện tại của project
+     * đang query DB riêng.
+     *
+     * Sau khi item.update đã nằm trong transaction,
+     * Sequelize transaction vẫn nhìn thấy thay đổi
+     * trong cùng connection.
      */
+    const items = await OrderItem.findAll({
+      where: {
+        order_id: order.id,
+      },
+      transaction,
+    });
+
+    if (items.length > 0) {
+      const statuses = items.map(
+        (orderItem) => orderItem.status
+      );
+
+      let newOrderStatus:
+        | "pending"
+        | "processing"
+        | "completed"
+        | null = null;
+
+      const allFinished =
+        statuses.every(
+          (itemStatus) =>
+            itemStatus === "served" ||
+            itemStatus === "cancelled"
+        );
+
+      if (allFinished) {
+        newOrderStatus = "completed";
+      } else if (
+        statuses.some(
+          (itemStatus) =>
+            itemStatus === "cooking" ||
+            itemStatus === "ready" ||
+            itemStatus === "served"
+        )
+      ) {
+        newOrderStatus = "processing";
+      } else if (
+        statuses.every(
+          (itemStatus) =>
+            itemStatus === "pending"
+        )
+      ) {
+        newOrderStatus = "pending";
+      }
+
+      if (newOrderStatus) {
+        await Order.update(
+          {
+            status: newOrderStatus,
+          },
+          {
+            where: {
+              id: order.id,
+            },
+            transaction,
+          }
+        );
+      }
+    }
+
+    // =====================================================
+    // 13. COMMIT
+    // =====================================================
+
+    await transaction.commit();
+
+    // =====================================================
+    // 14. REALTIME KDS
+    // =====================================================
 
     try {
       const io = getIO();
 
-      /*
-       * Thông báo OrderItem thay đổi
-       */
       io.emit(
         "order-item-status-updated",
         {
           id: item.id,
+
           order_id:
             item.order_id,
+
           menu_item_id:
             item.menu_item_id,
-          status:
-            item.status,
+
+          status: item.status,
         }
       );
 
-      /*
-       * Lấy Order mới nhất
-       * sau khi syncOrderStatus()
-       */
       const updatedOrder =
-        await Order.findByPk(
-          order.id
-        );
+        await Order.findByPk(order.id);
 
-      /*
-       * Thông báo Order thay đổi
-       */
       io.emit(
         "order-status-updated",
         {
-          order_id:
-            order.id,
+          order_id: order.id,
+
           status:
             updatedOrder?.status,
         }
       );
     } catch (socketError) {
-      /*
-       * Socket lỗi không làm
-       * request update thất bại.
-       */
       console.warn(
         "SOCKET ORDER ITEM STATUS WARNING:",
         socketError
       );
     }
 
-    /*
-     * ===================================================
-     * 14. RESPONSE
-     * ===================================================
-     */
+    // =====================================================
+    // 15. RESPONSE
+    // =====================================================
 
     return res.status(200).json({
       message:
         "Cập nhật trạng thái món thành công",
+
       data: item,
     });
-  } catch (error: unknown) {
+  } catch (error) {
+    // =====================================================
+    // ROLLBACK
+    // =====================================================
+
+    await transaction.rollback();
+
+    // =====================================================
+    // INVENTORY ERROR
+    // =====================================================
+
+    if (
+      error instanceof InventoryConsumptionError
+    ) {
+      return res.status(400).json({
+        message: error.message,
+      });
+    }
+
+    // =====================================================
+    // SERVER ERROR
+    // =====================================================
+
     console.error(
       "UPDATE ORDER ITEM STATUS ERROR:",
       error
     );
 
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Không thể cập nhật trạng thái món";
-
     return res.status(500).json({
-      message,
+      message:
+        "Không thể cập nhật trạng thái món",
     });
   }
 };

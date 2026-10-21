@@ -14,7 +14,9 @@ export interface OrderAttributes {
   reservation_id?: number | null;
   total_price: number;
   status?: OrderStatus;
-  is_deleted?: boolean;
+  is_deleted?: boolean; 
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 type OrderCreationAttributes = Optional<

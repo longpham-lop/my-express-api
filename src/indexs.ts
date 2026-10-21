@@ -31,6 +31,8 @@ import RecipeRouter from './routers/recipe.routers';
 import inventoryRouter from './routers/inventory.routers';
 import purchaseRouter from './routers/purchase.routers';
 import inventoryTransactionRouter from './routers/inventoryTransaction.routers';
+import revenueRouter from './routers/revenue.routers';
+import salesAnalyticsRouter from "./routers/salesAnalytics.routers";
 
 dotenv.config();
 
@@ -69,7 +71,8 @@ app.use('/api/recipes', RecipeRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/inventory-transactions',inventoryTransactionRouter);
 app.use('/api/purchases', purchaseRouter);
-
+app.use('/api/reports', revenueRouter);
+app.use('/api/analytics', salesAnalyticsRouter);
 
 /* ================= SOCKET ================= */
 const server = http.createServer(app);

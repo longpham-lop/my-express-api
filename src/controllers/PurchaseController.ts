@@ -634,6 +634,7 @@ export const updatePurchase = async (
    CONFIRM PURCHASE
 ===================================================== */
 
+
 export const confirmPurchase = async (
   req: AuthRequest,
   res: Response
@@ -646,14 +647,13 @@ export const confirmPurchase = async (
       await transaction.rollback();
 
       return res.status(403).json({
-        message:
-          "Bạn không có quyền xác nhận phiếu nhập",
+        message: "Bạn không có quyền xác nhận phiếu nhập",
       });
     }
 
     const id = Number(req.params.id);
 
-    if (!Number.isInteger(id)) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
       await transaction.rollback();
 
       return res.status(400).json({
@@ -661,16 +661,11 @@ export const confirmPurchase = async (
       });
     }
 
-    const purchase =
-      await Purchase.findByPk(id, {
-        include: [
-          {
-            model: PurchaseItem,
-            as: "items",
-          },
-        ],
-        transaction,
-      });
+    // Khóa phiếu nhập để tránh xác nhận đồng thời.
+    const purchase = await Purchase.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
 
     if (!purchase) {
       await transaction.rollback();
@@ -689,6 +684,7 @@ export const confirmPurchase = async (
       });
     }
 
+    // Chỉ xác nhận phiếu đang ở trạng thái draft.
     if (purchase.status !== "draft") {
       await transaction.rollback();
 
@@ -698,23 +694,64 @@ export const confirmPurchase = async (
       });
     }
 
-    if (
-      !purchase.items ||
-      purchase.items.length === 0
-    ) {
+    // Lấy chi tiết phiếu nhập trực tiếp từ database.
+    const items = await PurchaseItem.findAll({
+      where: {
+        purchase_id: purchase.id,
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (items.length === 0) {
       await transaction.rollback();
 
       return res.status(400).json({
-        message:
-          "Phiếu nhập chưa có nguyên liệu",
+        message: "Phiếu nhập chưa có nguyên liệu",
       });
     }
 
-   for (const item of purchase.items) {
-    const importQuantity = Number(item.quantity);
+    for (const item of items) {
+      const importQuantity = Number(item.quantity);
 
-    const inventory =
-      await BranchInventory.findOne({
+      if (
+        !Number.isFinite(importQuantity) ||
+        importQuantity <= 0
+      ) {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          message:
+            `Số lượng nhập của nguyên liệu ID ${item.ingredient_id} không hợp lệ`,
+        });
+      }
+
+      // Kiểm tra nguyên liệu còn hoạt động.
+      const ingredient = await Ingredient.findByPk(
+        item.ingredient_id,
+        { transaction }
+      );
+
+      if (!ingredient) {
+        await transaction.rollback();
+
+        return res.status(404).json({
+          message:
+            `Không tìm thấy nguyên liệu ID ${item.ingredient_id}`,
+        });
+      }
+
+      if (ingredient.status !== "active") {
+        await transaction.rollback();
+
+        return res.status(400).json({
+          message:
+            `Nguyên liệu "${ingredient.name}" đang inactive`,
+        });
+      }
+
+      // Tìm tồn kho theo chi nhánh và nguyên liệu.
+      const inventory = await BranchInventory.findOne({
         where: {
           branch_id: purchase.branch_id,
           ingredient_id: item.ingredient_id,
@@ -723,60 +760,52 @@ export const confirmPurchase = async (
         lock: transaction.LOCK.UPDATE,
       });
 
-    if (inventory) {
-      const currentQuantity =
-        Number(inventory.quantity) || 0;
+      if (inventory) {
+        const currentQuantity =
+          Number(inventory.quantity) || 0;
 
-      await inventory.update(
-        {
-          quantity:
-            currentQuantity + importQuantity,
-        },
-        { transaction }
-      );
-    } else {
-      await BranchInventory.create(
+        await inventory.update(
+          {
+            quantity: currentQuantity + importQuantity,
+          },
+          { transaction }
+        );
+      } else {
+        await BranchInventory.create(
+          {
+            branch_id: purchase.branch_id,
+            ingredient_id: item.ingredient_id,
+            quantity: importQuantity,
+            minimum_stock: 0,
+          },
+          { transaction }
+        );
+      }
+
+      // Ghi lịch sử nhập kho.
+      await InventoryTransaction.create(
         {
           branch_id: purchase.branch_id,
           ingredient_id: item.ingredient_id,
+          type: "import",
           quantity: importQuantity,
-          minimum_stock: 0,
+          unit: item.unit,
+          reference_type: "purchase",
+          reference_id: purchase.id,
+          note: `Nhập kho từ phiếu nhập #${purchase.id}`,
+          created_by: req.user?.id ?? null,
         },
         { transaction }
       );
     }
 
-    // Ghi lịch sử giao dịch kho
-    await InventoryTransaction.create(
+    // Chỉ chuyển trạng thái sau khi xử lý toàn bộ nguyên liệu.
+    await purchase.update(
       {
-        branch_id: purchase.branch_id,
-
-        ingredient_id: item.ingredient_id,
-
-        type: "import",
-
-        quantity: importQuantity,
-
-        unit: item.unit,
-
-        reference_type: "purchase",
-
-        reference_id: purchase.id,
-
-        note: `Nhập kho từ phiếu nhập #${purchase.id}`,
-
-        created_by: req.user?.id ?? null,
+        status: "confirmed",
       },
       { transaction }
     );
-  }
-
-      await purchase.update(
-        {
-          status: "confirmed",
-        },
-        { transaction }
-      );
 
     await transaction.commit();
 
@@ -785,19 +814,23 @@ export const confirmPurchase = async (
         "Xác nhận phiếu nhập và cập nhật tồn kho thành công",
     });
   } catch (error) {
-    await transaction.rollback();
+    try {
+      await transaction.rollback();
+    } catch (rollbackError) {
+      console.error(
+        "ROLLBACK PURCHASE ERROR:",
+        rollbackError
+      );
+    }
 
-    console.error(
-      "CONFIRM PURCHASE ERROR:",
-      error
-    );
+    console.error("CONFIRM PURCHASE ERROR:", error);
 
     return res.status(500).json({
-      message:
-        "Không thể xác nhận phiếu nhập",
+      message: "Không thể xác nhận phiếu nhập",
     });
   }
 };
+
 
 /* =====================================================
    CANCEL PURCHASE

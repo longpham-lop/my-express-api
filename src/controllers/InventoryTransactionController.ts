@@ -6,6 +6,9 @@ import InventoryTransaction from "../models/InventoryTransaction";
 import Branch from "../models/Branch";
 import Ingredient from "../models/Ingredient";
 import User from "../models/User";
+import { Transaction } from "sequelize";
+import sequelize from "../config/db";
+import BranchInventory from "../models/BranchInventory";
 
 import { AuthRequest } from "../middlewares/auth.middleware";
 
@@ -226,8 +229,242 @@ const getInventoryTransactionById = async (
     });
   }
 };
+  
+const adjustInventory = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    if (!req.user) {
+      await transaction.rollback();
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    const allowedRoles = [
+      "admin",
+      "chain_manager",
+      "branch_manager",
+    ];
+
+    if (!allowedRoles.includes(req.user.role)) {
+      await transaction.rollback();
+      return res.status(403).json({
+        message: "Bạn không có quyền điều chỉnh kho",
+      });
+    }
+
+    const ingredientId = Number(req.body.ingredient_id);
+    const adjustment = Number(req.body.quantity);
+    const note = req.body.note;
+
+    if (
+      !Number.isInteger(ingredientId) ||
+      ingredientId <= 0
+    ) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "ingredient_id không hợp lệ",
+      });
+    }
+
+    if (
+      req.body.quantity === null ||
+      req.body.quantity === undefined ||
+      req.body.quantity === "" ||
+      !Number.isFinite(adjustment) ||
+      adjustment === 0 ||
+      Math.abs(adjustment) > 1_000_000_000 ||
+      Math.round(adjustment * 1000) / 1000 !== adjustment
+    ) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message:
+          "quantity phải khác 0, tối đa 3 chữ số thập phân và nằm trong giới hạn cho phép",
+      });
+    }
+
+    if (
+      typeof note !== "string" ||
+      note.trim().length < 3 ||
+      note.trim().length > 1000
+    ) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Lý do điều chỉnh phải từ 3 đến 1000 ký tự",
+      });
+    }
+
+    let branchId: number;
+
+    if (
+      req.user.role === "admin" ||
+      req.user.role === "chain_manager"
+    ) {
+      branchId = Number(req.body.branch_id);
+
+      if (!Number.isInteger(branchId) || branchId <= 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          message: "branch_id không hợp lệ",
+        });
+      }
+    } else {
+      branchId = Number(req.user.branchId);
+
+      if (!Number.isInteger(branchId) || branchId <= 0) {
+        await transaction.rollback();
+        return res.status(403).json({
+          message: "Tài khoản chưa được gán chi nhánh",
+        });
+      }
+    }
+
+    const branch = await Branch.findByPk(branchId, {
+      transaction,
+    });
+
+    if (!branch) {
+      await transaction.rollback();
+      return res.status(404).json({
+        message: "Không tìm thấy chi nhánh",
+      });
+    }
+
+    const ingredient = await Ingredient.findByPk(
+      ingredientId,
+      { transaction }
+    );
+
+    if (!ingredient) {
+      await transaction.rollback();
+      return res.status(404).json({
+        message: "Không tìm thấy nguyên liệu",
+      });
+    }
+
+    if (ingredient.status !== "active") {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Không thể điều chỉnh nguyên liệu đã ngừng hoạt động",
+      });
+    }
+
+    const inventory = await BranchInventory.findOne({
+      where: {
+        branch_id: branchId,
+        ingredient_id: ingredientId,
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    const currentQuantity = inventory
+      ? Number(inventory.quantity)
+      : 0;
+
+    if (
+      !Number.isFinite(currentQuantity) ||
+      currentQuantity < 0
+    ) {
+      await transaction.rollback();
+      return res.status(409).json({
+        message: "Số dư tồn kho hiện tại không hợp lệ",
+      });
+    }
+
+    const newQuantity =
+      Math.round((currentQuantity + adjustment) * 1000) / 1000;
+
+    if (newQuantity < 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Không thể điều chỉnh khiến tồn kho âm",
+        current_quantity: currentQuantity,
+        adjustment_quantity: adjustment,
+      });
+    }
+
+    if (newQuantity > 1_000_000_000) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Tồn kho sau điều chỉnh vượt giới hạn cho phép",
+      });
+    }
+
+    if (inventory) {
+      await inventory.update(
+        { quantity: newQuantity },
+        { transaction }
+      );
+    } else {
+      await BranchInventory.create(
+        {
+          branch_id: branchId,
+          ingredient_id: ingredientId,
+          quantity: newQuantity,
+          minimum_stock: 0,
+        },
+        { transaction }
+      );
+    }
+
+    const inventoryTransaction =
+      await InventoryTransaction.create(
+        {
+          branch_id: branchId,
+          ingredient_id: ingredientId,
+          type: "adjustment",
+          quantity: adjustment,
+          unit: ingredient.unit,
+          reference_type: "manual_adjustment",
+          reference_id: null,
+          note: note.trim(),
+          created_by: req.user.id,
+        },
+        { transaction }
+      );
+
+    await transaction.commit();
+
+    return res.status(201).json({
+      message: "Điều chỉnh tồn kho thành công",
+      data: {
+        transaction_id: inventoryTransaction.id,
+        branch_id: branchId,
+        ingredient_id: ingredientId,
+        ingredient_name: ingredient.name,
+        unit: ingredient.unit,
+        previous_quantity: currentQuantity,
+        adjustment_quantity: adjustment,
+        new_quantity: newQuantity,
+        note: note.trim(),
+      },
+    });
+  } catch (error) {
+    try {
+      await transaction.rollback();
+    } catch (rollbackError) {
+      console.error(
+        "ROLLBACK INVENTORY ADJUSTMENT ERROR:",
+        rollbackError
+      );
+    }
+
+    console.error("ADJUST INVENTORY ERROR:", error);
+
+    return res.status(500).json({
+      message: "Không thể điều chỉnh tồn kho",
+    });
+  }
+};
+
 
 export {
   getAllInventoryTransactions,
   getInventoryTransactionById,
+  adjustInventory,
 };

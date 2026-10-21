@@ -9,6 +9,8 @@ export interface PaymentAttributes {
   method: string;
   amount: number;
   status?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 // 2️⃣ Class model chuẩn TS

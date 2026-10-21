@@ -759,31 +759,35 @@ export const updateOrderItemStatus = async (
     // 5. KIỂM TRA CHI NHÁNH
     // =====================================================
 
+    
     const isGlobalRole =
       req.user.role === "admin" ||
       req.user.role === "chain_manager";
 
     if (!isGlobalRole) {
-      if (req.user.branchId === null) {
-        await transaction.rollback();
+      const userBranchId = Number(req.user.branchId);
+      const orderBranchId = Number(order.branch_id);
 
+      if (
+        req.user.branchId == null ||
+        !Number.isInteger(userBranchId) ||
+        userBranchId <= 0
+      ) {
         return res.status(403).json({
-          message:
-            "Tài khoản chưa được gán chi nhánh",
+          message: "Tài khoản chưa được gán chi nhánh",
         });
       }
 
       if (
-        req.user.branchId !== order.branch_id
+        !Number.isInteger(orderBranchId) ||
+        userBranchId !== orderBranchId
       ) {
-        await transaction.rollback();
-
         return res.status(403).json({
-          message:
-            "Bạn không có quyền thao tác đơn của chi nhánh này",
+          message: "Bạn không có quyền thao tác đơn của chi nhánh này",
         });
       }
     }
+
 
     // =====================================================
     // 6. LẤY TRẠNG THÁI HIỆN TẠI
@@ -795,64 +799,48 @@ export const updateOrderItemStatus = async (
     // 7. KITCHEN FLOW
     // =====================================================
 
-    const canOperateKitchen =
-      req.user.role === "kitchen" ||
-      req.user.role === "admin" ||
-      req.user.role === "chain_manager" ||
-      req.user.role === "branch_manager";
+    // Các luồng chuyển trạng thái hợp lệ
+    const validKitchenTransition =
+      (currentStatus === "pending" && status === "cooking") ||
+      (currentStatus === "cooking" && status === "ready");
 
-    if (canOperateKitchen) {
-      const validKitchenTransition =
-        (currentStatus === "pending" &&
-          status === "cooking") ||
-        (currentStatus === "cooking" &&
-          status === "ready");
+    const validServingTransition =
+      currentStatus === "ready" && status === "served";
 
-      if (!validKitchenTransition) {
-        await transaction.rollback();
+    const validCancelTransition =
+      (currentStatus === "pending" ||
+        currentStatus === "cooking" ||
+        currentStatus === "ready") &&
+      status === "cancelled";
 
-        return res.status(403).json({
-          message:
-            "Bếp chỉ được chuyển món từ Chờ chế biến → Đang chế biến → Đã làm xong",
-        });
-      }
+    const role = req.user.role;
+
+    let isAllowedTransition = false;
+
+    if (role === "kitchen") {
+      // Bếp: Chờ chế biến → Đang chế biến → Đã làm xong
+      isAllowedTransition = validKitchenTransition;
+    } else if (role === "waiter") {
+      // Phục vụ: Đã làm xong → Đã phục vụ
+      isAllowedTransition = validServingTransition;
+    } else if (
+      role === "admin" ||
+      role === "chain_manager" ||
+      role === "branch_manager"
+    ) {
+      // Admin và quản lý được thao tác luồng bếp,
+      // luồng phục vụ và hủy món trước khi phục vụ.
+      isAllowedTransition =
+        validKitchenTransition ||
+        validServingTransition ||
+        validCancelTransition;
     }
 
-    // =====================================================
-    // 8. WAITER FLOW
-    // =====================================================
-
-    const canOperateServing =
-      req.user.role === "admin" ||
-      req.user.role === "chain_manager" ||
-      req.user.role === "branch_manager" ||
-      req.user.role === "waiter";
-
-    if (canOperateServing) {
-      const validServingTransition =
-        currentStatus === "ready" &&
-        status === "served";
-
-      if (!validServingTransition) {
-        await transaction.rollback();
-
-        return res.status(403).json({
-          message:
-            "Chỉ được chuyển món từ Đã làm xong → Đã phục vụ",
-        });
-      }
-    }
-
-    // =====================================================
-    // 9. ROLE KHÔNG CÓ QUYỀN
-    // =====================================================
-
-    else {
+    if (!isAllowedTransition) {
       await transaction.rollback();
 
       return res.status(403).json({
-        message:
-          "Bạn không có quyền cập nhật trạng thái món",
+        message: "Bạn không có quyền chuyển trạng thái món theo bước này",
       });
     }
 

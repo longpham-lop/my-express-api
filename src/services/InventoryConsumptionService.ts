@@ -10,6 +10,7 @@ interface ConsumeOrderItemParams {
   branchId: number;
   menuItemId: number;
   orderItemQuantity: number;
+  createdBy: number;
 }
 
 export class InventoryConsumptionError extends Error {
@@ -44,6 +45,7 @@ export const consumeInventoryForOrderItem = async (
     branchId,
     menuItemId,
     orderItemQuantity,
+    createdBy,
   } = params;
 
   // =====================================================
@@ -149,6 +151,26 @@ export const consumeInventoryForOrderItem = async (
       inventory,
       requirement,
     });
+    
+  // Kiểm tra lại sau khi đã khóa các dòng tồn kho.
+  // Nếu request khác vừa xuất kho và commit,
+  // request hiện tại sẽ phát hiện giao dịch đã tồn tại.
+
+    const duplicateTransactions =
+      await InventoryTransaction.findOne({
+        where: {
+          reference_type: "order_item",
+          reference_id: orderItemId,
+          type: "export",
+        },
+        transaction,
+      });
+
+    if (duplicateTransactions) {
+      throw new InventoryConsumptionError(
+        `OrderItem #${orderItemId} đã được xuất kho trước đó`
+      );
+    }
   }
 
   // =====================================================
@@ -226,7 +248,7 @@ export const consumeInventoryForOrderItem = async (
           `Xuất kho cho Order #${orderId}, ` +
           `OrderItem #${orderItemId}`,
 
-        created_by: null,
+        created_by: createdBy,
       },
       {
         transaction,

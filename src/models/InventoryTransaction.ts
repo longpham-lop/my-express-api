@@ -7,6 +7,12 @@ import {
 } from "sequelize";
 
 import sequelize from "../config/db";
+export type InventoryTransactionType =
+  | "in"
+  | "out"
+  | "import"
+  | "export"
+  | "adjustment";
 
 class InventoryTransaction extends Model<
   InferAttributes<InventoryTransaction>,
@@ -16,7 +22,7 @@ class InventoryTransaction extends Model<
 
   declare branch_id: number;
   declare ingredient_id: number;
-  declare type: string;
+  declare type: InventoryTransactionType;
   declare quantity: number;
   declare unit: string;
 

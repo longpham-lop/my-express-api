@@ -28,8 +28,23 @@ router.get(
   getAllInventoryTransactions
 );
 
-router.post("/adjust", authMiddleware, adjustInventory);
-router.get("/low-stock", authMiddleware, getLowStockInventory);
+router.post(
+  "/adjust",
+  authMiddleware,
+  requireRole("admin", "chain_manager", "branch_manager"),
+  adjustInventory
+);
+router.get(
+  "/low-stock",
+  authMiddleware,
+  requireRole(
+    "admin",
+    "chain_manager",
+    "branch_manager",
+    "kitchen"
+  ),
+  getLowStockInventory
+);
 
 router.get(
   "/:id",

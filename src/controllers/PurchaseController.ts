@@ -768,7 +768,7 @@ export const confirmPurchase = async (
           {
             quantity: currentQuantity + importQuantity,
           },
-          { transaction }
+          { transaction } 
         );
       } else {
         await BranchInventory.create(

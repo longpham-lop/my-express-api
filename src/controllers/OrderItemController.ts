@@ -755,11 +755,11 @@ export const updateOrderItemStatus = async (
       });
     }
 
+    
     // =====================================================
     // 5. KIỂM TRA CHI NHÁNH
     // =====================================================
 
-    
     const isGlobalRole =
       req.user.role === "admin" ||
       req.user.role === "chain_manager";
@@ -773,6 +773,8 @@ export const updateOrderItemStatus = async (
         !Number.isInteger(userBranchId) ||
         userBranchId <= 0
       ) {
+        await transaction.rollback();
+
         return res.status(403).json({
           message: "Tài khoản chưa được gán chi nhánh",
         });
@@ -780,13 +782,18 @@ export const updateOrderItemStatus = async (
 
       if (
         !Number.isInteger(orderBranchId) ||
+        orderBranchId <= 0 ||
         userBranchId !== orderBranchId
       ) {
+        await transaction.rollback();
+
         return res.status(403).json({
-          message: "Bạn không có quyền thao tác đơn của chi nhánh này",
+          message:
+            "Bạn không có quyền thao tác đơn của chi nhánh này",
         });
       }
     }
+
 
 
     // =====================================================
@@ -871,6 +878,7 @@ export const updateOrderItemStatus = async (
 
           orderItemQuantity:
             Number(item.quantity),
+          createdBy: req.user.id,
         },
         transaction
       );
@@ -918,7 +926,12 @@ export const updateOrderItemStatus = async (
         | "pending"
         | "processing"
         | "completed"
+        | "cancelled"
         | null = null;
+      
+      const allCancelled = statuses.every(
+        (itemStatus) => itemStatus === "cancelled"
+      );
 
       const allFinished =
         statuses.every(
@@ -926,6 +939,31 @@ export const updateOrderItemStatus = async (
             itemStatus === "served" ||
             itemStatus === "cancelled"
         );
+
+      const hasServed = statuses.some(
+        (itemStatus) => itemStatus === "served"
+      );
+
+      if (allCancelled) {
+        newOrderStatus = "cancelled";
+      } else if (allFinished && hasServed) {
+        newOrderStatus = "completed";
+      } else if (
+        statuses.some(
+          (itemStatus) =>
+            itemStatus === "cooking" ||
+            itemStatus === "ready" ||
+            itemStatus === "served"
+        )
+      ) {
+        newOrderStatus = "processing";
+      } else if (
+        statuses.every(
+          (itemStatus) => itemStatus === "pending"
+        )
+      ) {
+        newOrderStatus = "pending";
+      }
 
       if (allFinished) {
         newOrderStatus = "completed";

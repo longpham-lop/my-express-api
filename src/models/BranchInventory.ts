@@ -52,12 +52,18 @@ BranchInventory.init(
       type: DataTypes.DECIMAL(12, 3),
       allowNull: false,
       defaultValue: 0,
+      validate: {
+        min: 0,
+      },
     },
 
     minimum_stock: {
       type: DataTypes.DECIMAL(12, 3),
       allowNull: false,
       defaultValue: 0,
+      validate: {
+        min: 0,
+      },
     },
   },
   {

@@ -3,6 +3,9 @@ import BranchInventory from "../models/BranchInventory";
 import Branch from "../models/Branch";
 import Ingredient from "../models/Ingredient";
 import { AuthRequest } from "../middlewares/auth.middleware";
+import sequelize from "../config/db";
+import { UniqueConstraintError } from "sequelize";
+import InventoryTransaction from "../models/InventoryTransaction";
 
 const GLOBAL_ROLES = ["admin", "chain_manager"];
 const MANAGE_ROLES = ["admin", "chain_manager", "branch_manager"];
@@ -18,7 +21,11 @@ const canAccessBranch = (
 
   return userBranchId === branchId;
 };
+const isPositiveInteger = (value: number): boolean =>
+  Number.isSafeInteger(value) && value > 0;
 
+const isValidQuantity = (value: number): boolean =>
+  Number.isFinite(value) && value >= 0;
 /* =========================================================
    GET ALL INVENTORY
 ========================================================= */
@@ -43,10 +50,20 @@ export const getAllInventory = async (
     // Admin / chain_manager:
     // có thể xem tất cả hoặc lọc theo branch_id
     if (GLOBAL_ROLES.includes(role)) {
-      if (req.query.branch_id) {
-        const requestedBranchId = Number(req.query.branch_id);
+      if (req.query.branch_id !== undefined) {
+        const requestedBranch = req.query.branch_id;
 
-        if (!Number.isInteger(requestedBranchId)) {
+        if (
+          typeof requestedBranch !== "string" ||
+          !/^[1-9]\d*$/.test(requestedBranch)
+        ) {
+          return res.status(400).json({
+            message: "branch_id không hợp lệ",
+          });
+        }
+
+        const requestedBranchId = Number(requestedBranch);
+        if (!isPositiveInteger(requestedBranchId)) {
           return res.status(400).json({
             message: "branch_id không hợp lệ",
           });
@@ -54,11 +71,8 @@ export const getAllInventory = async (
 
         where.branch_id = requestedBranchId;
       }
-    }
-
-    // Branch manager / waiter / kitchen:
-    // chỉ xem kho của chi nhánh mình
-    else {
+    } else {
+      // Branch manager / waiter / kitchen chỉ xem kho của chi nhánh mình.
       if (!branchId) {
         return res.status(403).json({
           message: "Tài khoản chưa được gán chi nhánh",
@@ -276,30 +290,71 @@ export const createInventory = async (
       });
     }
 
-    const existing = await BranchInventory.findOne({
-      where: {
-        branch_id: branchId,
-        ingredient_id: ingredientId,
-      },
-    });
-
-    if (existing) {
-      return res.status(409).json({
-        message: "Nguyên liệu này đã có tồn kho tại chi nhánh",
+     
+try {
+  const inventory = await sequelize.transaction(
+    async (transaction) => {
+      const existing = await BranchInventory.findOne({
+        where: {
+          branch_id: branchId,
+          ingredient_id: ingredientId,
+        },
+        transaction,
       });
-    }
 
-    const inventory = await BranchInventory.create({
-      branch_id: branchId,
-      ingredient_id: ingredientId,
-      quantity: stockQuantity,
-      minimum_stock: minimumStock,
-    });
+      if (existing) {
+        throw new Error("INVENTORY_ALREADY_EXISTS");
+      }
+
+      const createdInventory = await BranchInventory.create(
+        {
+          branch_id: branchId,
+          ingredient_id: ingredientId,
+          quantity: stockQuantity,
+          minimum_stock: minimumStock,
+        },
+        { transaction }
+      );
+
+      if (stockQuantity > 0) {
+        await InventoryTransaction.create(
+          {
+            branch_id: branchId,
+            ingredient_id: ingredientId,
+            type: "adjustment",
+            quantity: stockQuantity,
+            unit: ingredient.unit,
+            reference_type: "initial_stock",
+            reference_id: null,
+            note: "Ghi nhận số lượng tồn kho ban đầu",
+            created_by: req.user!.id,
+          },
+          { transaction }
+        );
+      }
+
+      return createdInventory;
+    }
+  );
 
     return res.status(201).json({
       message: "Tạo tồn kho thành công",
       data: inventory,
     });
+  } catch (error) {
+    if (
+      error instanceof UniqueConstraintError ||
+      (error instanceof Error &&
+        error.message === "INVENTORY_ALREADY_EXISTS")
+    ) {
+      return res.status(409).json({
+        message: "Nguyên liệu này đã có tồn kho tại chi nhánh",
+      });
+    }
+
+    throw error;
+  }
+
   } catch (error) {
     console.error("CREATE INVENTORY ERROR:", error);
 
@@ -312,6 +367,7 @@ export const createInventory = async (
 /* =========================================================
    UPDATE INVENTORY
 ========================================================= */
+
 
 export const updateInventory = async (
   req: AuthRequest,
@@ -332,13 +388,66 @@ export const updateInventory = async (
 
     const id = Number(req.params.id);
 
-    if (!Number.isInteger(id)) {
+    if (!isPositiveInteger(id)) {
       return res.status(400).json({
         message: "ID tồn kho không hợp lệ",
       });
     }
 
-    const inventory = await BranchInventory.findByPk(id);
+    const { quantity, minimum_stock } = req.body;
+
+    if (quantity !== undefined) {
+      return res.status(400).json({
+        message:
+          "Không được cập nhật quantity trực tiếp. Hãy sử dụng chức năng điều chỉnh tồn kho.",
+      });
+    }
+
+    if (minimum_stock === undefined) {
+      return res.status(400).json({
+        message: "Không có dữ liệu cần cập nhật",
+      });
+    }
+
+    const newMinimumStock = Number(minimum_stock);
+
+    if (!isValidQuantity(newMinimumStock)) {
+      return res.status(400).json({
+        message: "minimum_stock không hợp lệ",
+      });
+    }
+
+    const inventory = await sequelize.transaction(
+      async (transaction) => {
+        const currentInventory = await BranchInventory.findByPk(id, {
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+
+        if (!currentInventory) {
+          return null;
+        }
+
+        if (
+          !canAccessBranch(
+            req.user!.role,
+            req.user!.branchId,
+            currentInventory.branch_id
+          )
+        ) {
+          throw new Error("INVENTORY_ACCESS_DENIED");
+        }
+
+        await currentInventory.update(
+          {
+            minimum_stock: newMinimumStock,
+          },
+          { transaction }
+        );
+
+        return currentInventory;
+      }
+    );
 
     if (!inventory) {
       return res.status(404).json({
@@ -346,65 +455,20 @@ export const updateInventory = async (
       });
     }
 
+    return res.status(200).json({
+      message: "Cập nhật tồn kho thành công",
+      data: inventory,
+    });
+  } catch (error) {
     if (
-      req.user.role === "branch_manager" &&
-      req.user.branchId !== inventory.branch_id
+      error instanceof Error &&
+      error.message === "INVENTORY_ACCESS_DENIED"
     ) {
       return res.status(403).json({
         message: "Bạn không có quyền cập nhật tồn kho này",
       });
     }
 
-    const {
-      quantity,
-      minimum_stock,
-    } = req.body;
-
-    const updateData: {
-      quantity?: number;
-      minimum_stock?: number;
-    } = {};
-
-    if (quantity !== undefined) {
-      const newQuantity = Number(quantity);
-
-      if (!Number.isFinite(newQuantity) || newQuantity < 0) {
-        return res.status(400).json({
-          message: "quantity không hợp lệ",
-        });
-      }
-
-      updateData.quantity = newQuantity;
-    }
-
-    if (minimum_stock !== undefined) {
-      const newMinimumStock = Number(minimum_stock);
-
-      if (
-        !Number.isFinite(newMinimumStock) ||
-        newMinimumStock < 0
-      ) {
-        return res.status(400).json({
-          message: "minimum_stock không hợp lệ",
-        });
-      }
-
-      updateData.minimum_stock = newMinimumStock;
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({
-        message: "Không có dữ liệu cần cập nhật",
-      });
-    }
-
-    await inventory.update(updateData);
-
-    return res.status(200).json({
-      message: "Cập nhật tồn kho thành công",
-      data: inventory,
-    });
-  } catch (error) {
     console.error("UPDATE INVENTORY ERROR:", error);
 
     return res.status(500).json({
@@ -413,9 +477,11 @@ export const updateInventory = async (
   }
 };
 
+
 /* =========================================================
    DELETE INVENTORY
 ========================================================= */
+
 
 export const deleteInventory = async (
   req: AuthRequest,
@@ -436,34 +502,83 @@ export const deleteInventory = async (
 
     const id = Number(req.params.id);
 
-    if (!Number.isInteger(id)) {
+    if (!isPositiveInteger(id)) {
       return res.status(400).json({
         message: "ID tồn kho không hợp lệ",
       });
     }
 
-    const inventory = await BranchInventory.findByPk(id);
+    const result = await sequelize.transaction(
+      async (transaction) => {
+        const inventory = await BranchInventory.findByPk(id, {
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
 
-    if (!inventory) {
-      return res.status(404).json({
-        message: "Không tìm thấy tồn kho",
-      });
+        if (!inventory) {
+          return "NOT_FOUND" as const;
+        }
+
+        if (
+          !canAccessBranch(
+            req.user!.role,
+            req.user!.branchId,
+            inventory.branch_id
+          )
+        ) {
+          return "FORBIDDEN" as const;
+        }
+
+        if (Number(inventory.quantity) > 0) {
+          return "HAS_STOCK" as const;
+        }
+
+        const transactionCount = await InventoryTransaction.count({
+          where: {
+            branch_id: inventory.branch_id,
+            ingredient_id: inventory.ingredient_id,
+          },
+          transaction,
+        });
+
+        if (transactionCount > 0) {
+          return "HAS_HISTORY" as const;
+        }
+
+        await inventory.destroy({ transaction });
+
+        return "DELETED" as const;
+      }
+    );
+
+    switch (result) {
+      case "NOT_FOUND":
+        return res.status(404).json({
+          message: "Không tìm thấy tồn kho",
+        });
+
+      case "FORBIDDEN":
+        return res.status(403).json({
+          message: "Bạn không có quyền xóa tồn kho này",
+        });
+
+      case "HAS_STOCK":
+        return res.status(409).json({
+          message:
+            "Không thể xóa tồn kho còn số lượng. Hãy điều chỉnh tồn kho về 0 trước.",
+        });
+
+      case "HAS_HISTORY":
+        return res.status(409).json({
+          message:
+            "Không thể xóa tồn kho đã có lịch sử giao dịch. Hãy giữ lại bản ghi để đối soát.",
+        });
+
+      case "DELETED":
+        return res.status(200).json({
+          message: "Xóa tồn kho thành công",
+        });
     }
-
-    if (
-      req.user.role === "branch_manager" &&
-      req.user.branchId !== inventory.branch_id
-    ) {
-      return res.status(403).json({
-        message: "Bạn không có quyền xóa tồn kho này",
-      });
-    }
-
-    await inventory.destroy();
-
-    return res.status(200).json({
-      message: "Xóa tồn kho thành công",
-    });
   } catch (error) {
     console.error("DELETE INVENTORY ERROR:", error);
 

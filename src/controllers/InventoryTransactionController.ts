@@ -1,12 +1,11 @@
 
 import { Request, Response } from "express";
-import { WhereOptions } from "sequelize";
+import { Op, Transaction, WhereOptions } from "sequelize";
 
 import InventoryTransaction from "../models/InventoryTransaction";
 import Branch from "../models/Branch";
 import Ingredient from "../models/Ingredient";
 import User from "../models/User";
-import { Transaction } from "sequelize";
 import sequelize from "../config/db";
 import BranchInventory from "../models/BranchInventory";
 
@@ -33,7 +32,7 @@ const getAllInventoryTransactions = async (
     if (GLOBAL_ROLES.includes(req.user.role)) {
       const branchQuery = req.query.branch_id;
 
-      if (branchQuery !== undefined) {
+      if (branchQuery !== undefined && branchQuery !== "") {
         const branchId = Number(branchQuery);
 
         if (!Number.isInteger(branchId) || branchId <= 0) {
@@ -60,7 +59,7 @@ const getAllInventoryTransactions = async (
     // 2. Lọc theo loại giao dịch
     const typeQuery = req.query.type;
 
-    if (typeQuery !== undefined) {
+    if (typeQuery !== undefined && typeQuery !== "") {
       if (
         typeof typeQuery !== "string" ||
         !VALID_TYPES.includes(typeQuery)
@@ -76,7 +75,7 @@ const getAllInventoryTransactions = async (
     // 3. Lọc theo nguyên liệu
     const ingredientQuery = req.query.ingredient_id;
 
-    if (ingredientQuery !== undefined) {
+    if (ingredientQuery !== undefined && ingredientQuery !== "") {
       const ingredientId = Number(ingredientQuery);
 
       if (
@@ -89,6 +88,84 @@ const getAllInventoryTransactions = async (
       }
 
       whereCondition.ingredient_id = ingredientId;
+    }
+    
+    // 4. Lọc theo ngày giao dịch
+    const startDateQuery = req.query.start_date;
+    const endDateQuery = req.query.end_date;
+
+    const parseDate = (
+      value: unknown
+    ): Date | null => {
+      if (
+        typeof value !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(value)
+      ) {
+        return null;
+      }
+
+      const date = new Date(`${value}T00:00:00.000Z`);
+
+      if (
+        Number.isNaN(date.getTime()) ||
+        date.toISOString().slice(0, 10) !== value
+      ) {
+        return null;
+      }
+
+      return date;
+    };
+
+    let startDate: Date | undefined;
+    let endDateExclusive: Date | undefined;
+
+    if (startDateQuery !== undefined && startDateQuery !== "") {
+      const parsedStart = parseDate(startDateQuery);
+
+      if (!parsedStart) {
+        return res.status(400).json({
+          message: "start_date không hợp lệ. Định dạng yêu cầu: YYYY-MM-DD",
+        });
+      }
+
+      startDate = parsedStart;
+    }
+
+    if (endDateQuery !== undefined && endDateQuery !== "") {
+      const parsedEnd = parseDate(endDateQuery);
+
+      if (!parsedEnd) {
+        return res.status(400).json({
+          message: "end_date không hợp lệ. Định dạng yêu cầu: YYYY-MM-DD",
+        });
+      }
+
+      // Lấy đến hết ngày kết thúc bằng cách dùng mốc
+      // đầu ngày tiếp theo theo kiểu khoảng [start, end).
+      endDateExclusive = new Date(
+        parsedEnd.getTime() + 24 * 60 * 60 * 1000
+      );
+    }
+
+    if (
+      startDate &&
+      endDateExclusive &&
+      startDate.getTime() >= endDateExclusive.getTime()
+    ) {
+      return res.status(400).json({
+        message: "Ngày bắt đầu không được sau ngày kết thúc",
+      });
+    }
+
+    if (startDate || endDateExclusive) {
+      whereCondition.createdAt = {
+        ...(startDate && {
+          [Op.gte]: startDate,
+        }),
+        ...(endDateExclusive && {
+          [Op.lt]: endDateExclusive,
+        }),
+      };
     }
 
     // 4. Phân trang

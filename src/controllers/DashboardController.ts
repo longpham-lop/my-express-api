@@ -1,81 +1,144 @@
-import { Response } from "express";
-import { fn, col, literal, Op, WhereOptions } from "sequelize";
 
-import Menu from "../models/Menu";
-import Order from "../models/Order";
-import Table from "../models/Table";
-import Reservation from "../models/Reservation";
-import OrderItem from "../models/OrderItem";
+import { Request, Response } from "express";
+import { fn, col, Op, WhereOptions } from "sequelize";
+
+import {
+  Menu,
+  Order,
+  Table,
+  Reservation,
+  Payment,
+  OrderItem,
+  StaffBranch,
+} from "../models";
+
 import { AuthRequest } from "../middlewares/auth.middleware";
 
-interface BookingRow {
-  day: string;
-  bookings: string | number;
+interface DashboardUser {
+  id: number;
+  role: string;
+  branchId?: number | null;
+}
+
+interface PaymentAmountRow {
+  amount: number | string;
+}
+
+interface BookingByDayRow {
+  date: string;
+  count: number | string;
 }
 
 interface TopDishRow {
-  menu_item_id: number;
-  totalSold: string | number;
+  menu_item_id: number | string;
+  totalSold: number | string;
 }
 
+interface MenuItemRow {
+  id: number;
+  name?: string;
+}
+
+const toNumber = (
+  value: number | string | null | undefined
+): number => Number(value ?? 0);
+
 export const getDashboard = async (
-  req: AuthRequest,
+  req: Request,
   res: Response
-) => {
+): Promise<Response | void> => {
   try {
-    const user = req.user;
+    const authReq = req as AuthRequest;
+    const user = authReq.user as DashboardUser | undefined;
 
     if (!user) {
       return res.status(401).json({
-        message: "Chưa đăng nhập",
+        message: "Vui lòng đăng nhập để xem Dashboard",
       });
     }
 
+    const isAdmin = user.role === "admin";
+    const isChainManager = user.role === "chain_manager";
     const isBranchManager = user.role === "branch_manager";
 
-    if (isBranchManager && !user.branchId) {
+    if (!isAdmin && !isChainManager && !isBranchManager) {
       return res.status(403).json({
-        message: "Tài khoản chưa được gán chi nhánh",
+        message: "Bạn không có quyền xem Dashboard",
       });
     }
 
-    const branchId = user.branchId;
+    // 1. Xác định các chi nhánh tài khoản được phép xem.
+    let branchIds: number[] | null = null;
 
-    /*
-     * =====================================================
-     * FILTER THEO CHI NHÁNH
-     * =====================================================
-     */
+    if (isBranchManager) {
+      if (!user.branchId) {
+        return res.status(403).json({
+          message: "Tài khoản chưa được gán chi nhánh",
+        });
+      }
 
-    const menuWhere: WhereOptions =
-      isBranchManager
-        ? { branch_id: branchId }
-        : {};
+      branchIds = [Number(user.branchId)];
+    }
 
-    const orderWhere: WhereOptions =
-      isBranchManager
-        ? { branch_id: branchId }
-        : {};
+    if (isChainManager) {
+      const assignedBranches = await StaffBranch.findAll({
+        attributes: ["branch_id"],
+        where: {
+          user_id: user.id,
+        },
+        raw: true,
+      });
 
-    const tableWhere: WhereOptions =
-      isBranchManager
-        ? { branch_id: branchId }
-        : {};
+      branchIds = [
+        ...new Set(
+          assignedBranches.map((item) => Number(item.branch_id))
+        ),
+      ];
 
-    const reservationWhere: WhereOptions =
-      isBranchManager
-        ? { branch_id: branchId }
-        : {};
+      if (branchIds.length === 0) {
+        return res.status(403).json({
+          message: "Tài khoản chưa được phân công chi nhánh quản lý",
+        });
+      }
+    }
 
-    /* =====================================================
-     * CARD STATS
-     * ===================================================== */
+    // 2. Tạo điều kiện lọc theo chi nhánh.
+    // Admin có branchIds = null nên được xem toàn hệ thống.
+    const branchFilter: WhereOptions = branchIds
+      ? {
+          branch_id: {
+            [Op.in]: branchIds,
+          },
+        }
+      : {};
 
+    const menuWhere: WhereOptions = {
+      ...branchFilter,
+    };
+
+    const orderWhere: WhereOptions = {
+      is_deleted: false,
+      ...branchFilter,
+    };
+
+    const tableWhere: WhereOptions = {
+      ...branchFilter,
+    };
+
+    const reservationWhere: WhereOptions = {
+      ...branchFilter,
+    };
+
+    // 3. Thống kê tổng quan.
     const [
       menuCount,
       orderCount,
-      tableAvailable,
-      pendingOrders,
+      availableTableCount,
+      pendingOrderCount,
+      bookingCount,
+      successfulPayments,
+      reservedTableCount,
+      occupiedTableCount,
     ] = await Promise.all([
       Menu.count({
         where: menuWhere,
@@ -98,22 +161,30 @@ export const getDashboard = async (
           status: "pending",
         },
       }),
-    ]);
 
-    /* =====================================================
-     * TABLE STATUS
-     * ===================================================== */
+      Reservation.count({
+        where: reservationWhere,
+      }),
 
-    const [
-      availableTables,
-      reservedTables,
-      occupiedTables,
-    ] = await Promise.all([
-      Table.count({
+      Payment.findAll({
+        attributes: ["amount"],
         where: {
-          ...tableWhere,
-          status: "available",
+          status: "success",
         },
+        include: [
+          {
+            model: Order,
+            attributes: [],
+            where: {
+              ...orderWhere,
+              status: {
+                [Op.ne]: "cancelled",
+              },
+            },
+            required: true,
+          },
+        ],
+        raw: true,
       }),
 
       Table.count({
@@ -131,149 +202,125 @@ export const getDashboard = async (
       }),
     ]);
 
-    /* =====================================================
-     * BOOKING BY DAY
-     * ===================================================== */
+    // 4. Doanh thu từ các khoản thanh toán thành công
+    // của đơn chưa bị xóa mềm hoặc hủy.
+    const paymentRows =
+      successfulPayments as unknown as PaymentAmountRow[];
 
+    const revenue = paymentRows.reduce(
+      (total, payment) => total + toNumber(payment.amount),
+      0
+    );
+
+    // 5. Số lượt đặt bàn theo ngày.
     const bookingRows = (await Reservation.findAll({
       attributes: [
-        [fn("DATE", col("reservation_time")), "day"],
-        [fn("COUNT", col("id")), "bookings"],
+        [fn("DATE", col("reservation_time")), "date"],
+        [fn("COUNT", col("id")), "count"],
       ],
       where: reservationWhere,
       group: [fn("DATE", col("reservation_time"))],
-      order: [[literal("day"), "ASC"]],
+      order: [[fn("DATE", col("reservation_time")), "ASC"]],
       raw: true,
-    })) as unknown as BookingRow[];
+    })) as unknown as BookingByDayRow[];
 
-    const bookingByDay = bookingRows.map((row) => ({
-      day: row.day,
-      bookings: Number(row.bookings),
+    const bookingByDay = bookingRows.map((item) => ({
+      date: String(item.date),
+      count: toNumber(item.count),
     }));
 
-    /* =====================================================
-     * RECENT ORDERS
-     * ===================================================== */
+    // 6. Phân bố trạng thái bàn.
+    const tableStatus = [
+      {
+        status: "available",
+        count: availableTableCount,
+      },
+      {
+        status: "reserved",
+        count: reservedTableCount,
+      },
+      {
+        status: "occupied",
+        count: occupiedTableCount,
+      },
+    ];
 
-    const recentOrders = await Order.findAll({
+    // 7. Top 5 món bán chạy.
+    // Không tính món thuộc đơn đã hủy hoặc đơn bị xóa mềm.
+    const topDishRows = (await OrderItem.findAll({
       attributes: [
-        "id",
-        "status",
-        "total_price",
-        "createdAt",
+        "menu_item_id",
+        [fn("SUM", col("quantity")), "totalSold"],
       ],
-      where: orderWhere,
-      order: [["createdAt", "DESC"]],
-      limit: 5,
-      raw: true,
-    });
-
-    /* =====================================================
-     * TOP MÓN
-     * ===================================================== */
-
-    let topDishRows: TopDishRow[] = [];
-
-    if (isBranchManager) {
-      /*
-       * Lấy các order thuộc chi nhánh của branch_manager
-       */
-      const branchOrders = await Order.findAll({
-        attributes: ["id"],
-        where: {
-          branch_id: branchId,
+      where: {
+        status: {
+          [Op.ne]: "cancelled",
         },
-        raw: true,
-      });
-
-      const orderIds = branchOrders.map((order) => order.id);
-
-      if (orderIds.length > 0) {
-        topDishRows = (await OrderItem.findAll({
-          attributes: [
-            "menu_item_id",
-            [fn("SUM", col("quantity")), "totalSold"],
-          ],
+      },
+      include: [
+        {
+          model: Order,
+          attributes: [],
           where: {
-            order_id: {
-              [Op.in]: orderIds,
+            ...orderWhere,
+            status: {
+              [Op.ne]: "cancelled",
             },
           },
-          group: ["menu_item_id"],
-          order: [[fn("SUM", col("quantity")), "DESC"]],
-          limit: 5,
-          raw: true,
-        })) as unknown as TopDishRow[];
-      }
-    } else {
-      /*
-       * Admin / chain_manager:
-       * xem top món toàn hệ thống
-       */
-      topDishRows = (await OrderItem.findAll({
-        attributes: [
-          "menu_item_id",
-          [fn("SUM", col("quantity")), "totalSold"],
-        ],
-        group: ["menu_item_id"],
-        order: [[fn("SUM", col("quantity")), "DESC"]],
-        limit: 5,
-        raw: true,
-      })) as unknown as TopDishRow[];
-    }
+          required: true,
+        },
+      ],
+      group: ["menu_item_id"],
+      order: [[fn("SUM", col("quantity")), "DESC"]],
+      limit: 5,
+      raw: true,
+    })) as unknown as TopDishRow[];
 
     const topDishes = await Promise.all(
       topDishRows.map(async (item) => {
-        const menu = await Menu.findByPk(item.menu_item_id);
+        const menuItemId = Number(item.menu_item_id);
+
+        const menuItem = (await Menu.findByPk(menuItemId, {
+          attributes: ["id", "name"],
+        })) as unknown as MenuItemRow | null;
 
         return {
-          name: menu?.name || "Không xác định",
-          value: Number(item.totalSold || 0),
+          menu_item_id: menuItemId,
+          name: menuItem?.name ?? "Món không xác định",
+          totalSold: toNumber(item.totalSold),
         };
       })
     );
 
-    /* =====================================================
-     * RESPONSE
-     * ===================================================== */
+    // 8. Năm đơn hàng gần nhất.
+    const recentOrders = await Order.findAll({
+      where: orderWhere,
+      order: [["createdAt", "DESC"]],
+      limit: 5,
+    });
 
-    return res.json({
+    // 9. Trả dữ liệu cho frontend.
+    return res.status(200).json({
       menu: menuCount,
       orders: orderCount,
-      tables: tableAvailable,
-      pendingOrders,
-
+      tables: availableTableCount,
+      bookings: bookingCount,
+      revenue,
+      pendingOrders: pendingOrderCount,
       bookingByDay,
-
-      tableStatus: [
-        {
-          name: "Bàn trống",
-          value: availableTables,
-        },
-        {
-          name: "Đã đặt",
-          value: reservedTables,
-        },
-        {
-          name: "Đang phục vụ",
-          value: occupiedTables,
-        },
-      ],
-
+      tableStatus,
       topDishes,
       recentOrders,
     });
-  } catch (err: unknown) {
-    console.error("Dashboard Error:", err);
-
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Unknown error";
+  } catch (error: unknown) {
+    console.error("Lỗi getDashboard:", error);
 
     return res.status(500).json({
-      message: "Lỗi server dashboard",
-      error: message,
+      message: "Không thể tải dữ liệu Dashboard",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Đã xảy ra lỗi không xác định",
     });
   }
 };

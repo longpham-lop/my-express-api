@@ -13,9 +13,6 @@ import {
 import { AuthRequest } from "../middlewares/auth.middleware";
 import { getIO } from "../socket";
 
-/* =====================================================
- * HELPER: UPDATE ORDER TOTAL
- * ===================================================== */
 
 const updateOrderTotal = async (order_id: number) => {
   const items = await OrderItem.findAll({
@@ -44,25 +41,6 @@ const updateOrderTotal = async (order_id: number) => {
   );
 };
 
-/* =====================================================
- * HELPER: SYNC ORDER STATUS
- *
- * Quy tắc:
- *
- * Tất cả món cancelled
- * → Order cancelled
- *
- * Có ít nhất 1 món served
- * và tất cả món còn lại served/cancelled
- * → Order completed
- *
- * Có món cooking / ready / served
- * → Order processing
- *
- * Tất cả món pending
- * → Order pending
- * ===================================================== */
-
 const syncOrderStatus = async (order_id: number) => {
   const items = await OrderItem.findAll({
     where: {
@@ -70,15 +48,24 @@ const syncOrderStatus = async (order_id: number) => {
     },
   });
 
-  /*
-   * Order chưa có món
-   */
   if (items.length === 0) {
     return;
   }
 
-  const statuses = items.map(
-    (item) => item.status
+  const statuses = items.map((item) => item.status);
+
+  const allCancelled = statuses.every(
+    (itemStatus) => itemStatus === "cancelled"
+  );
+
+  const allFinished = statuses.every(
+    (itemStatus) =>
+      itemStatus === "served" ||
+      itemStatus === "cancelled"
+  );
+
+  const hasServed = statuses.some(
+    (itemStatus) => itemStatus === "served"
   );
 
   let newOrderStatus:
@@ -88,100 +75,26 @@ const syncOrderStatus = async (order_id: number) => {
     | "cancelled"
     | null = null;
 
-  /*
-   * =====================================================
-   * 1. TẤT CẢ MÓN ĐỀU BỊ HỦY
-   * =====================================================
-   */
-
-  const allCancelled = statuses.every(
-    (status) => status === "cancelled"
-  );
-
   if (allCancelled) {
     newOrderStatus = "cancelled";
+  } else if (allFinished && hasServed) {
+    newOrderStatus = "completed";
+  } else if (
+    statuses.some(
+      (itemStatus) =>
+        itemStatus === "cooking" ||
+        itemStatus === "ready" ||
+        itemStatus === "served"
+    )
+  ) {
+    newOrderStatus = "processing";
+  } else if (
+    statuses.every((itemStatus) => itemStatus === "pending")
+  ) {
+    newOrderStatus = "pending";
   }
 
-  /*
-   * =====================================================
-   * 2. TẤT CẢ MÓN ĐÃ HOÀN TẤT
-   *
-   * served hoặc cancelled
-   *
-   * Nhưng phải có ít nhất 1 món served.
-   *
-   * Ví dụ:
-   *
-   * served + served
-   * → completed
-   *
-   * served + cancelled
-   * → completed
-   *
-   * cancelled + cancelled
-   * → cancelled
-   * =====================================================
-   */
-
-  else {
-    const allFinished = statuses.every(
-      (status) =>
-        status === "served" ||
-        status === "cancelled"
-    );
-
-    const hasServed = statuses.some(
-      (status) => status === "served"
-    );
-
-    if (allFinished && hasServed) {
-      newOrderStatus = "completed";
-    }
-
-    /*
-     * ===================================================
-     * 3. ĐANG XỬ LÝ
-     *
-     * Có ít nhất một món:
-     * cooking
-     * ready
-     * served
-     * ===================================================
-     */
-
-    else if (
-      statuses.some(
-        (status) =>
-          status === "cooking" ||
-          status === "ready" ||
-          status === "served"
-      )
-    ) {
-      newOrderStatus = "processing";
-    }
-
-    /*
-     * ===================================================
-     * 4. TẤT CẢ ĐANG CHỜ
-     * ===================================================
-     */
-
-    else if (
-      statuses.every(
-        (status) => status === "pending"
-      )
-    ) {
-      newOrderStatus = "pending";
-    }
-  }
-
-  /*
-   * =====================================================
-   * UPDATE ORDER
-   * =====================================================
-   */
-
-  if (newOrderStatus) {
+  if (newOrderStatus !== null) {
     await Order.update(
       {
         status: newOrderStatus,
@@ -195,16 +108,7 @@ const syncOrderStatus = async (order_id: number) => {
   }
 };
 
-/* =====================================================
- * ROLE CONFIG
- * ===================================================== */
 
-/*
- * Role được phép thao tác trạng thái món.
- *
- * Lưu ý:
- * cashier KHÔNG được thao tác trạng thái món.
- */
 const STATUS_ROLES = [
   "admin",
   "chain_manager",
@@ -653,27 +557,6 @@ export const deleteOrderItem = async (
   }
 };
 
-/* =====================================================
- * UPDATE ORDER ITEM STATUS
- *
- * Đây là hàm quan trọng nhất của KDS + ManageOrder.
- *
- * KITCHEN:
- * pending  → cooking
- * cooking  → ready
- *
- * WAITER:
- * ready → served
- *
- * ADMIN / CHAIN MANAGER / BRANCH MANAGER:
- * ready → served
- *
- * ADMIN / CHAIN MANAGER / BRANCH MANAGER:
- * pending → cancelled
- * cooking → cancelled
- * ready → cancelled
- * ===================================================== */
-
 export const updateOrderItemStatus = async (
   req: AuthRequest,
   res: Response
@@ -740,12 +623,9 @@ export const updateOrderItemStatus = async (
     // 4. TÌM ORDER
     // =====================================================
 
-    const order = await Order.findByPk(
-      item.order_id,
-      {
-        transaction,
-      }
-    );
+    const order = await Order.findByPk(item.order_id, {
+      transaction,
+    });
 
     if (!order) {
       await transaction.rollback();
@@ -855,35 +735,34 @@ export const updateOrderItemStatus = async (
     // 10. XUẤT KHO KHI READY → SERVED
     // =====================================================
     
+   if (currentStatus === "ready" && status === "served") {
+    const branchId = Number(order.branch_id);
+
     if (
-      currentStatus === "ready" &&
-      status === "served"
+      order.branch_id === null ||
+      order.branch_id === undefined ||
+      !Number.isInteger(branchId) ||
+      branchId <= 0
     ) {
-      if (order.branch_id === null || order.branch_id === undefined) {
       await transaction.rollback();
 
       return res.status(400).json({
-        message: "Đơn hàng chưa được gán chi nhánh",
+        message: "Đơn hàng chưa được gán chi nhánh hợp lệ",
       });
     }
-      await consumeInventoryForOrderItem(
-        {
-          orderItemId: item.id,
 
-          orderId: order.id,
-
-          branchId: order.branch_id,
-
-          menuItemId: item.menu_item_id,
-
-          orderItemQuantity:
-            Number(item.quantity),
-          createdBy: req.user.id,
-        },
-        transaction
-      );
-    }
-
+    await consumeInventoryForOrderItem(
+      {
+        orderItemId: item.id,
+        orderId: order.id,
+        branchId,
+        menuItemId: item.menu_item_id,
+        orderItemQuantity: Number(item.quantity),
+        createdBy: req.user.id,
+      },
+      transaction,
+    );
+  }
     // =====================================================
     // 11. UPDATE ORDER ITEM
     // =====================================================
@@ -897,19 +776,11 @@ export const updateOrderItemStatus = async (
       }
     );
 
+    
     // =====================================================
     // 12. ĐỒNG BỘ ORDER STATUS
     // =====================================================
 
-    /*
-     * Lưu ý:
-     * syncOrderStatus hiện tại của project
-     * đang query DB riêng.
-     *
-     * Sau khi item.update đã nằm trong transaction,
-     * Sequelize transaction vẫn nhìn thấy thay đổi
-     * trong cùng connection.
-     */
     const items = await OrderItem.findAll({
       where: {
         order_id: order.id,
@@ -919,7 +790,21 @@ export const updateOrderItemStatus = async (
 
     if (items.length > 0) {
       const statuses = items.map(
-        (orderItem) => orderItem.status
+        (orderItem) => orderItem.status,
+      );
+
+      const allCancelled = statuses.every(
+        (itemStatus) => itemStatus === "cancelled",
+      );
+
+      const allFinished = statuses.every(
+        (itemStatus) =>
+          itemStatus === "served" ||
+          itemStatus === "cancelled",
+      );
+
+      const hasServed = statuses.some(
+        (itemStatus) => itemStatus === "served",
       );
 
       let newOrderStatus:
@@ -928,21 +813,6 @@ export const updateOrderItemStatus = async (
         | "completed"
         | "cancelled"
         | null = null;
-      
-      const allCancelled = statuses.every(
-        (itemStatus) => itemStatus === "cancelled"
-      );
-
-      const allFinished =
-        statuses.every(
-          (itemStatus) =>
-            itemStatus === "served" ||
-            itemStatus === "cancelled"
-        );
-
-      const hasServed = statuses.some(
-        (itemStatus) => itemStatus === "served"
-      );
 
       if (allCancelled) {
         newOrderStatus = "cancelled";
@@ -953,52 +823,30 @@ export const updateOrderItemStatus = async (
           (itemStatus) =>
             itemStatus === "cooking" ||
             itemStatus === "ready" ||
-            itemStatus === "served"
+            itemStatus === "served",
         )
       ) {
         newOrderStatus = "processing";
       } else if (
         statuses.every(
-          (itemStatus) => itemStatus === "pending"
+          (itemStatus) => itemStatus === "pending",
         )
       ) {
         newOrderStatus = "pending";
       }
 
-      if (allFinished) {
-        newOrderStatus = "completed";
-      } else if (
-        statuses.some(
-          (itemStatus) =>
-            itemStatus === "cooking" ||
-            itemStatus === "ready" ||
-            itemStatus === "served"
-        )
-      ) {
-        newOrderStatus = "processing";
-      } else if (
-        statuses.every(
-          (itemStatus) =>
-            itemStatus === "pending"
-        )
-      ) {
-        newOrderStatus = "pending";
-      }
-
-      if (newOrderStatus) {
-        await Order.update(
+      if (newOrderStatus !== null) {
+        await order.update(
           {
             status: newOrderStatus,
           },
           {
-            where: {
-              id: order.id,
-            },
             transaction,
-          }
+          },
         );
       }
     }
+
 
     // =====================================================
     // 13. COMMIT
@@ -1057,37 +905,30 @@ export const updateOrderItemStatus = async (
 
       data: item,
     });
-  } catch (error) {
-    // =====================================================
-    // ROLLBACK
-    // =====================================================
+        } catch (error: unknown) {
+      try {
+        await transaction.rollback();
+      } catch {
+        // Giao dịch có thể đã kết thúc trước đó.
+      }
 
-    await transaction.rollback();
+      // =====================================================
+      // INVENTORY ERROR
+      // =====================================================
 
-    // =====================================================
-    // INVENTORY ERROR
-    // =====================================================
+      if (error instanceof InventoryConsumptionError) {
+        return res.status(400).json({
+          message: error.message,
+        });
+      }
 
-    if (
-      error instanceof InventoryConsumptionError
-    ) {
-      return res.status(400).json({
-        message: error.message,
+      console.error(
+        "Lỗi cập nhật trạng thái món ăn:",
+        error,
+      );
+
+      return res.status(500).json({
+        message: "Lỗi server khi cập nhật trạng thái món ăn",
       });
     }
-
-    // =====================================================
-    // SERVER ERROR
-    // =====================================================
-
-    console.error(
-      "UPDATE ORDER ITEM STATUS ERROR:",
-      error
-    );
-
-    return res.status(500).json({
-      message:
-        "Không thể cập nhật trạng thái món",
-    });
   }
-};

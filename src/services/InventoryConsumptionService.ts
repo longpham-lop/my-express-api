@@ -1,6 +1,7 @@
-import { Transaction } from "sequelize";
 
+import { Transaction } from "sequelize";
 import RecipeItem from "../models/RecipeItem";
+import Ingredient from "../models/Ingredient";
 import BranchInventory from "../models/BranchInventory";
 import InventoryTransaction from "../models/InventoryTransaction";
 
@@ -13,6 +14,19 @@ interface ConsumeOrderItemParams {
   createdBy: number;
 }
 
+interface IngredientRequirement {
+  ingredientId: number;
+  quantity: number;
+  unit: string;
+}
+
+interface InventoryRequirement {
+  inventory: BranchInventory;
+  ingredientId: number;
+  quantity: number;
+  unit: string;
+}
+
 export class InventoryConsumptionError extends Error {
   constructor(message: string) {
     super(message);
@@ -20,24 +34,54 @@ export class InventoryConsumptionError extends Error {
   }
 }
 
-/**
- * Xuất kho nguyên liệu khi một OrderItem được chuyển sang "served".
- *
- * Công thức:
- *
- * nguyên liệu cần dùng =
- * recipe.quantity × orderItem.quantity
- *
- * Ví dụ:
- *
- * Phở bò x 2
- * Thịt bò = 0.1kg / món
- *
- * => xuất 0.2kg
- */
+const normalizeUnit = (unit: string): string =>
+  unit.trim().toLocaleLowerCase("vi-VN");
+
+const convertToIngredientUnit = (
+  quantity: number,
+  recipeUnit: string,
+  ingredientUnit: string,
+): number => {
+  const from = normalizeUnit(recipeUnit);
+  const to = normalizeUnit(ingredientUnit);
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new InventoryConsumptionError(
+      "Định lượng nguyên liệu trong công thức không hợp lệ.",
+    );
+  }
+
+  if (from === to) {
+    return quantity;
+  }
+
+  // Khối lượng: quy đổi về đơn vị chuẩn của Ingredient.
+  if (from === "g" && to === "kg") {
+    return quantity / 1000;
+  }
+
+  if (from === "kg" && to === "g") {
+    return quantity * 1000;
+  }
+
+  // Thể tích: quy đổi về đơn vị chuẩn của Ingredient.
+  if (from === "ml" && to === "lít") {
+    return quantity / 1000;
+  }
+
+  if (from === "lít" && to === "ml") {
+    return quantity * 1000;
+  }
+
+  throw new InventoryConsumptionError(
+    `Không thể quy đổi đơn vị "${recipeUnit}" sang "${ingredientUnit}". ` +
+      "Hãy kiểm tra đơn vị công thức và đơn vị nguyên liệu.",
+  );
+};
+
 export const consumeInventoryForOrderItem = async (
   params: ConsumeOrderItemParams,
-  transaction: Transaction
+  transaction: Transaction,
 ) => {
   const {
     orderItemId,
@@ -48,227 +92,202 @@ export const consumeInventoryForOrderItem = async (
     createdBy,
   } = params;
 
-  // =====================================================
-  // 1. KIỂM TRA QUANTITY
-  // =====================================================
-
   if (
-    !Number.isFinite(orderItemQuantity) ||
-    orderItemQuantity <= 0
+    !Number.isInteger(orderItemId) ||
+    orderItemId <= 0 ||
+    !Number.isInteger(orderId) ||
+    orderId <= 0 ||
+    !Number.isInteger(branchId) ||
+    branchId <= 0 ||
+    !Number.isInteger(menuItemId) ||
+    menuItemId <= 0 ||
+    !Number.isInteger(createdBy) ||
+    createdBy <= 0
   ) {
     throw new InventoryConsumptionError(
-      "Số lượng món không hợp lệ"
+      "Thông tin món ăn, đơn hàng, chi nhánh hoặc người thực hiện không hợp lệ.",
     );
   }
 
-  // =====================================================
-  // 2. CHỐNG TRỪ KHO 2 LẦN
-  // =====================================================
+  if (!Number.isFinite(orderItemQuantity) || orderItemQuantity <= 0) {
+    throw new InventoryConsumptionError("Số lượng món không hợp lệ.");
+  }
 
-  const existedTransaction =
-    await InventoryTransaction.findOne({
-      where: {
-        reference_type: "order_item",
-        reference_id: orderItemId,
-        type: "export",
-      },
-      transaction,
-    });
+  // Ngăn xuất kho lặp cho cùng một order item.
+  const existedTransaction = await InventoryTransaction.findOne({
+    where: {
+      reference_type: "order_item",
+      reference_id: orderItemId,
+      type: "export",
+    },
+    transaction,
+  });
 
   if (existedTransaction) {
     throw new InventoryConsumptionError(
-      `OrderItem #${orderItemId} đã được xuất kho trước đó`
+      "Món ăn này đã được ghi nhận xuất kho, không thể xuất lần nữa.",
     );
   }
 
-  // =====================================================
-  // 3. LẤY CÔNG THỨC
-  // =====================================================
-
   const recipes = await RecipeItem.findAll({
-    where: {
-      menu_item_id: menuItemId,
-    },
+    where: { menu_item_id: menuItemId },
     order: [["ingredient_id", "ASC"]],
     transaction,
   });
 
-  // =====================================================
-  // 4. MÓN CHƯA CÓ CÔNG THỨC
-  // =====================================================
-
   if (recipes.length === 0) {
     throw new InventoryConsumptionError(
-      `Món #${menuItemId} chưa có công thức nguyên liệu. Không thể xuất kho.`
+      "Món ăn chưa có công thức nguyên liệu, không thể xuất kho.",
     );
   }
 
-  // =====================================================
-  // 5. TÍNH NGUYÊN LIỆU CẦN XUẤT
-  // =====================================================
+  // Lấy danh sách nguyên liệu chuẩn để xác định đơn vị tồn kho.
+  const ingredientIds = [
+    ...new Set(recipes.map((recipe) => Number(recipe.ingredient_id))),
+  ];
 
-  const requirements = recipes.map((recipe) => {
-    const requiredQuantity =
-      Number(recipe.quantity) *
-      orderItemQuantity;
-
-    return {
-      ingredientId: recipe.ingredient_id,
-      quantity: requiredQuantity,
-      unit: recipe.unit,
-    };
+  const ingredients = await Ingredient.findAll({
+    where: { id: ingredientIds },
+    transaction,
   });
 
-  // =====================================================
-  // 6. LẤY TỒN KHO
-  // =====================================================
+  const ingredientMap = new Map<number, Ingredient>();
 
-  const inventories = [];
-
-  for (const requirement of requirements) {
-    const inventory =
-      await BranchInventory.findOne({
-        where: {
-          branch_id: branchId,
-          ingredient_id:
-            requirement.ingredientId,
-        },
-
-        transaction,
-
-        // Khóa dòng tồn kho
-        // để tránh 2 request cùng trừ một lúc
-        lock: transaction.LOCK.UPDATE,
-      });
-
-    if (!inventory) {
-      throw new InventoryConsumptionError(
-        `Chi nhánh chưa có tồn kho cho nguyên liệu #${requirement.ingredientId}`
-      );
-    }
-
-    inventories.push({
-      inventory,
-      requirement,
-    });
-    
-  // Kiểm tra lại sau khi đã khóa các dòng tồn kho.
-  // Nếu request khác vừa xuất kho và commit,
-  // request hiện tại sẽ phát hiện giao dịch đã tồn tại.
-
-    const duplicateTransactions =
-      await InventoryTransaction.findOne({
-        where: {
-          reference_type: "order_item",
-          reference_id: orderItemId,
-          type: "export",
-        },
-        transaction,
-      });
-
-    if (duplicateTransactions) {
-      throw new InventoryConsumptionError(
-        `OrderItem #${orderItemId} đã được xuất kho trước đó`
-      );
-    }
+  for (const ingredient of ingredients) {
+    ingredientMap.set(Number(ingredient.id), ingredient);
   }
 
-  // =====================================================
-  // 7. KIỂM TRA ĐỦ TỒN KHO TRƯỚC KHI TRỪ
-  // =====================================================
+  // Quy đổi từng dòng công thức sang đơn vị chuẩn của Ingredient,
+  // sau đó cộng gộp nếu cùng nguyên liệu xuất hiện nhiều lần.
+  const requirementMap = new Map<number, IngredientRequirement>();
 
-  for (const item of inventories) {
-    const currentQuantity =
-      Number(item.inventory.quantity);
+  for (const recipe of recipes) {
+    const ingredientId = Number(recipe.ingredient_id);
+    const recipeQuantity = Number(recipe.quantity);
+    const recipeUnit = String(recipe.unit).trim();
+    const ingredient = ingredientMap.get(ingredientId);
+
+    if (!ingredient) {
+      throw new InventoryConsumptionError(
+        `Không tìm thấy nguyên liệu ID ${ingredientId}.`,
+      );
+    }
+
+    if (ingredient.status !== "active") {
+      throw new InventoryConsumptionError(
+        `Nguyên liệu "${ingredient.name}" đang ngừng hoạt động.`,
+      );
+    }
+
+    const ingredientUnit = String(ingredient.unit).trim();
 
     const requiredQuantity =
-      item.requirement.quantity;
+      convertToIngredientUnit(
+        recipeQuantity,
+        recipeUnit,
+        ingredientUnit,
+      ) * orderItemQuantity;
 
-    if (
-      currentQuantity < requiredQuantity
-    ) {
+    const existing = requirementMap.get(ingredientId);
+
+    requirementMap.set(ingredientId, {
+      ingredientId,
+      quantity: (existing?.quantity ?? 0) + requiredQuantity,
+      unit: ingredientUnit,
+    });
+  }
+
+  const requirements = Array.from(requirementMap.values());
+
+  // Khóa từng bản ghi tồn kho để tránh hai giao dịch đồng thời
+  // cùng đọc một số lượng tồn cũ rồi trừ kho sai.
+  const inventoryRequirements: InventoryRequirement[] = [];
+
+  for (const requirement of requirements) {
+    const inventory = await BranchInventory.findOne({
+      where: {
+        branch_id: branchId,
+        ingredient_id: requirement.ingredientId,
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    const ingredient = ingredientMap.get(requirement.ingredientId);
+
+    if (!inventory || !ingredient) {
       throw new InventoryConsumptionError(
-        `Không đủ tồn kho nguyên liệu #${item.requirement.ingredientId}. ` +
-        `Hiện có ${currentQuantity} ${item.requirement.unit}, ` +
-        `cần ${requiredQuantity} ${item.requirement.unit}`
+        `Chi nhánh chưa có tồn kho cho nguyên liệu ID ${requirement.ingredientId}.`,
+      );
+    }
+
+    inventoryRequirements.push({
+      inventory,
+      ingredientId: requirement.ingredientId,
+      quantity: requirement.quantity,
+      unit: requirement.unit,
+    });
+  }
+
+  // Kiểm tra toàn bộ tồn kho trước khi cập nhật bất kỳ nguyên liệu nào.
+  for (const item of inventoryRequirements) {
+    const currentQuantity = Number(item.inventory.quantity);
+
+    if (!Number.isFinite(currentQuantity) || currentQuantity < 0) {
+      throw new InventoryConsumptionError(
+        `Số lượng tồn kho của nguyên liệu ID ${item.ingredientId} không hợp lệ.`,
+      );
+    }
+
+    if (currentQuantity + 0.0000001 < item.quantity) {
+      const ingredient = ingredientMap.get(item.ingredientId);
+
+      throw new InventoryConsumptionError(
+        `Không đủ "${ingredient?.name ?? `ID ${item.ingredientId}`}". ` +
+          `Tồn kho: ${currentQuantity} ${item.unit}; ` +
+          `cần: ${item.quantity} ${item.unit}.`,
       );
     }
   }
 
-  // =====================================================
-  // 8. TRỪ TỒN KHO + GHI LỊCH SỬ
-  // =====================================================
-
-  for (const item of inventories) {
-    const currentQuantity =
-      Number(item.inventory.quantity);
-
-    const exportQuantity =
-      item.requirement.quantity;
-
-    const newQuantity =
-      currentQuantity - exportQuantity;
-
-    // ---------------------------------------------------
-    // UPDATE BRANCH INVENTORY
-    // ---------------------------------------------------
-
-    await item.inventory.update(
-      {
-        quantity: newQuantity,
-      },
-      {
-        transaction,
-      }
+  // Trừ tồn và tạo giao dịch xuất kho trong cùng transaction.
+  for (const item of inventoryRequirements) {
+    const currentQuantity = Number(item.inventory.quantity);
+    const remainingQuantity = Math.max(
+      0,
+      Number((currentQuantity - item.quantity).toFixed(3)),
     );
 
-    // ---------------------------------------------------
-    // CREATE INVENTORY TRANSACTION
-    // ---------------------------------------------------
+    await item.inventory.update(
+      { quantity: remainingQuantity },
+      { transaction },
+    );
 
     await InventoryTransaction.create(
       {
         branch_id: branchId,
-
-        ingredient_id:
-          item.requirement.ingredientId,
-
+        ingredient_id: item.ingredientId,
         type: "export",
-
-        // Xuất kho ghi số âm
-        quantity: -exportQuantity,
-
-        unit: item.requirement.unit,
-
+        quantity: -Number(item.quantity.toFixed(3)),
+        unit: item.unit,
         reference_type: "order_item",
-
         reference_id: orderItemId,
-
-        note:
-          `Xuất kho cho Order #${orderId}, ` +
-          `OrderItem #${orderItemId}`,
-
+        note: `Xuất kho cho đơn hàng #${orderId}, món #${orderItemId}`,
         created_by: createdBy,
       },
-      {
-        transaction,
-      }
+      { transaction },
     );
   }
 
-  // =====================================================
-  // 9. RETURN RESULT
-  // =====================================================
-
   return {
     orderItemId,
-
     orderId,
-
     branchId,
-
     menuItemId,
-
-    exportedItems: requirements,
+    exportedItems: inventoryRequirements.map((item) => ({
+      ingredientId: item.ingredientId,
+      quantity: Number(item.quantity.toFixed(3)),
+      unit: item.unit,
+    })),
   };
 };

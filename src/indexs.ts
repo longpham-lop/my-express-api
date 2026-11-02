@@ -77,11 +77,7 @@ app.use('/api/analytics', salesAnalyticsRouter);
 /* ================= SOCKET ================= */
 const server = http.createServer(app);
 
-const io = initSocket(server);
-
-io.on("connection", (socket) => {
-  console.log("Admin connected:", socket.id);
-});
+initSocket(server);
 
 /* ================= DATABASE ================= */
 const init = async () => {
@@ -103,8 +99,8 @@ const init = async () => {
 init();
 
 /* ================= START SERVER ================= */
-const PORT = 5000;
+const PORT = Number(process.env.PORT) || 5000;
 
 server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });

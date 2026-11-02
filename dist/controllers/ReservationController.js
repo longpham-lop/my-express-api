@@ -124,6 +124,23 @@ const getErrorMessage = (error) => {
         : "Unknown error";
 };
 /* =========================================================
+   SOCKET HELPER
+========================================================= */
+const emitReservationEvent = (eventName, branchId, payload) => {
+    try {
+        const io = (0, socket_1.getIO)();
+        const rooms = branchId != null
+            ? io
+                .to(`branch:${branchId}:reservations`)
+                .to("role:global")
+            : io.to("role:global");
+        rooms.emit(eventName, payload);
+    }
+    catch (error) {
+        console.warn("RESERVATION SOCKET WARNING:", error);
+    }
+};
+/* =========================================================
    CHECK RESERVATION AVAILABILITY
 ========================================================= */
 const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -574,21 +591,15 @@ const createOnlineReservation = (req, res) => __awaiter(void 0, void 0, void 0, 
          * 13. REALTIME
          * =====================================================
          */
-        try {
-            const io = (0, socket_1.getIO)();
-            io.emit("new-reservation", {
-                id: reservation.id,
-                branch_id: reservation.branch_id,
-                table_id: reservation.table_id,
-                name: reservation.customer_name,
-                phone: reservation.phone,
-                time: reservation.reservation_time,
-                status: reservation.status,
-            });
-        }
-        catch (socketError) {
-            console.warn("SOCKET ONLINE RESERVATION WARNING:", socketError);
-        }
+        emitReservationEvent("new-reservation", reservation.branch_id, {
+            id: reservation.id,
+            branch_id: reservation.branch_id,
+            table_id: reservation.table_id,
+            name: reservation.customer_name,
+            phone: reservation.phone,
+            time: reservation.reservation_time,
+            status: reservation.status,
+        });
         /*
          * =====================================================
          * 14. EMAIL XÁC NHẬN
@@ -777,7 +788,7 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
         ===================================================== */
         try {
             const io = (0, socket_1.getIO)();
-            io.emit("new-reservation", {
+            emitReservationEvent("new-reservation", reservation.branch_id, {
                 id: reservation.id,
                 branch_id: reservation.branch_id,
                 table_id: reservation.table_id,
@@ -787,8 +798,10 @@ const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 status: reservation.status,
             });
         }
-        catch (socketError) {
-            console.warn("SOCKET EMIT RESERVATION WARNING:", socketError);
+        /* =====================================================
+           7. EMAIL
+        ===================================================== */
+        finally {
         }
         /* =====================================================
            7. EMAIL
@@ -1044,8 +1057,10 @@ const getReservationById = (req, res) => __awaiter(void 0, void 0, void 0, funct
         }
         const canAccess = isManager(req.user.role)
             ? canManageBranch(req.user, reservation.branch_id)
-            : reservation.user_id ===
-                req.user.id;
+            : req.user.role === "waiter"
+                ? req.user.branchId === reservation.branch_id
+                : reservation.user_id === req.user.id;
+        req.user.id;
         if (!canAccess) {
             return res.status(403).json({
                 message: "Bạn không có quyền xem đặt bàn này",
@@ -1089,6 +1104,13 @@ const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
             });
         }
         const { table_id, reservation_time, guest_count, note, status, } = req.body;
+        // Không cho phép thay đổi trạng thái qua API cập nhật thông tin.
+        // Trạng thái phải đi qua các API chuyên biệt.
+        if (status !== undefined) {
+            return res.status(400).json({
+                message: "Vui lòng sử dụng chức năng riêng để thay đổi trạng thái đặt bàn",
+            });
+        }
         /* =====================================================
            VALIDATE STATUS
         ===================================================== */
@@ -1194,22 +1216,7 @@ const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
             note: note !== undefined
                 ? String(note).trim()
                 : reservation.note,
-            status: status !== null && status !== void 0 ? status : reservation.status,
         });
-        /* =====================================================
-           ĐỒNG BỘ TRẠNG THÁI BÀN
-        ===================================================== */
-        if (status === "checked_in") {
-            yield targetTable.update({
-                status: "occupied",
-            });
-        }
-        if (status === "completed" ||
-            status === "cancelled") {
-            yield targetTable.update({
-                status: "available",
-            });
-        }
         return res.json({
             message: "Cập nhật đặt bàn thành công",
             data: reservation,
@@ -1326,18 +1333,12 @@ const changeReservationStatus = (req, res, nextStatus) => __awaiter(void 0, void
         /* =====================================================
            REALTIME
         ===================================================== */
-        try {
-            const io = (0, socket_1.getIO)();
-            io.emit("reservation-status-updated", {
-                id: reservation.id,
-                branch_id: reservation.branch_id,
-                table_id: reservation.table_id,
-                status: nextStatus,
-            });
-        }
-        catch (socketError) {
-            console.warn("SOCKET RESERVATION STATUS WARNING:", socketError);
-        }
+        emitReservationEvent("reservation-status-updated", reservation.branch_id, {
+            id: reservation.id,
+            branch_id: reservation.branch_id,
+            table_id: reservation.table_id,
+            status: nextStatus,
+        });
         return res.json({
             message: "Cập nhật trạng thái thành công",
             data: reservation,

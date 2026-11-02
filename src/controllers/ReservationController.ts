@@ -134,6 +134,35 @@ const getErrorMessage = (error: unknown) => {
     ? error.message
     : "Unknown error";
 };
+
+
+/* =========================================================
+   SOCKET HELPER
+========================================================= */
+
+const emitReservationEvent = (
+  eventName: string,
+  branchId: number | null | undefined,
+  payload: Record<string, unknown>
+): void => {
+  try {
+    const io = getIO();
+
+    const rooms = branchId != null
+      ? io
+          .to(`branch:${branchId}:reservations`)
+          .to("role:global")
+      : io.to("role:global");
+
+    rooms.emit(eventName, payload);
+  } catch (error) {
+    console.warn(
+      "RESERVATION SOCKET WARNING:",
+      error
+    );
+  }
+};
+
 /* =========================================================
    CHECK RESERVATION AVAILABILITY
 ========================================================= */
@@ -812,31 +841,19 @@ export const createOnlineReservation = async (
      * =====================================================
      */
 
-    try {
-      const io = getIO();
-
-      io.emit("new-reservation", {
-        id: reservation.id,
-        branch_id:
-          reservation.branch_id,
-        table_id:
-          reservation.table_id,
-        name:
-          reservation.customer_name,
-        phone:
-          reservation.phone,
-        time:
-          reservation.reservation_time,
-        status:
-          reservation.status,
-      });
-    } catch (socketError) {
-      console.warn(
-        "SOCKET ONLINE RESERVATION WARNING:",
-        socketError
-      );
-    }
-
+   emitReservationEvent(
+  "new-reservation",
+  reservation.branch_id,
+  {
+    id: reservation.id,
+    branch_id: reservation.branch_id,
+    table_id: reservation.table_id,
+    name: reservation.customer_name,
+    phone: reservation.phone,
+    time: reservation.reservation_time,
+    status: reservation.status,
+  }
+);
     /*
      * =====================================================
      * 14. EMAIL XÁC NHẬN
@@ -1120,24 +1137,19 @@ export const createReservation = async (
        6. REALTIME
     ===================================================== */
 
-    try {
-      const io = getIO();
-
-      io.emit("new-reservation", {
+    emitReservationEvent(
+      "new-reservation",
+      reservation.branch_id ?? null,
+      {
         id: reservation.id,
-        branch_id: reservation.branch_id,
+        branch_id: reservation.branch_id ?? null,
         table_id: reservation.table_id,
         name: reservation.customer_name,
         phone: reservation.phone,
         time: reservation.reservation_time,
         status: reservation.status,
-      });
-    } catch (socketError) {
-      console.warn(
-        "SOCKET EMIT RESERVATION WARNING:",
-        socketError
-      );
-    }
+      }
+    );
 
     /* =====================================================
        7. EMAIL
@@ -1472,12 +1484,14 @@ export const getReservationById = async (
     }
 
     const canAccess =
-      isManager(req.user.role)
-        ? canManageBranch(
-            req.user,
-            reservation.branch_id
-          )
-        : reservation.user_id ===
+  isManager(req.user.role)
+    ? canManageBranch(
+        req.user,
+        reservation.branch_id
+      )
+    : req.user.role === "waiter"
+      ? req.user.branchId === reservation.branch_id
+      : reservation.user_id === req.user.id;
           req.user.id;
 
     if (!canAccess) {
@@ -1559,6 +1573,15 @@ export const updateReservation = async (
       note?: string;
       status?: ReservationStatus;
     };
+
+    // Không cho phép thay đổi trạng thái qua API cập nhật thông tin.
+    // Trạng thái phải đi qua các API chuyên biệt.
+    if (status !== undefined) {
+      return res.status(400).json({
+        message:
+          "Vui lòng sử dụng chức năng riêng để thay đổi trạng thái đặt bàn",
+      });
+    }
 
     /* =====================================================
        VALIDATE STATUS
@@ -1727,29 +1750,8 @@ export const updateReservation = async (
         note !== undefined
           ? String(note).trim()
           : reservation.note,
-      status:
-        status ?? reservation.status,
     });
-
-    /* =====================================================
-       ĐỒNG BỘ TRẠNG THÁI BÀN
-    ===================================================== */
-
-    if (status === "checked_in") {
-      await targetTable.update({
-        status: "occupied",
-      });
-    }
-
-    if (
-      status === "completed" ||
-      status === "cancelled"
-    ) {
-      await targetTable.update({
-        status: "available",
-      });
-    }
-
+    
     return res.json({
       message:
         "Cập nhật đặt bàn thành công",
@@ -1951,26 +1953,16 @@ const changeReservationStatus = async (
        REALTIME
     ===================================================== */
 
-    try {
-      const io = getIO();
-
-      io.emit(
-        "reservation-status-updated",
-        {
-          id: reservation.id,
-          branch_id:
-            reservation.branch_id,
-          table_id:
-            reservation.table_id,
-          status: nextStatus,
-        }
-      );
-    } catch (socketError) {
-      console.warn(
-        "SOCKET RESERVATION STATUS WARNING:",
-        socketError
-      );
-    }
+    emitReservationEvent(
+      "reservation-status-updated",
+      reservation.branch_id ?? null,
+      {
+        id: reservation.id,
+        branch_id: reservation.branch_id ?? null,
+        table_id: reservation.table_id,
+        status: nextStatus,
+      }
+    );
 
     return res.json({
       message:

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import MenuItem from "../models/Menu";
 import Category from "../models/Category";
+import { Op } from "sequelize";
 
 /* ================= CREATE ================= */
 export const createMenuItem = async (req: Request, res: Response) => {
@@ -36,10 +37,48 @@ export const createMenuItem = async (req: Request, res: Response) => {
 };
 
 /* ================= GET ALL ================= */
-export const getAllMenuItems = async (req: Request, res: Response) => {
+/* ================= GET ALL ================= */
+export const getAllMenuItems = async (
+  req: Request,
+  res: Response
+) => {
   try {
+    const branchIdParam = req.query.branch_id;
+    const activeOnly = req.query.active_only === "true";
+
+    let branchId: number | undefined;
+
+    // Kiểm tra branch_id nếu có truyền lên
+    if (branchIdParam !== undefined) {
+      branchId = Number(branchIdParam);
+
+      if (!Number.isInteger(branchId) || branchId <= 0) {
+        return res.status(400).json({
+          message: "branch_id không hợp lệ",
+        });
+      }
+    }
+
+    // Xây dựng điều kiện truy vấn
+    const whereCondition = {
+      is_deleted: false,
+
+      ...(activeOnly
+        ? { isActive: true }
+        : {}),
+
+      ...(branchId !== undefined
+        ? {
+            [Op.or]: [
+              { branch_id: branchId },
+              { branch_id: null },
+            ],
+          }
+        : {}),
+    };
+
     const items = await MenuItem.findAll({
-      where: { is_deleted: false },
+      where: whereCondition,
       include: [
         {
           model: Category,
@@ -54,8 +93,17 @@ export const getAllMenuItems = async (req: Request, res: Response) => {
       message: "Get all menu items success",
       data: items,
     });
-  } catch (err: any) {
-    return res.status(500).json({ message: err.message });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Không thể lấy danh sách món ăn";
+
+    console.error("GET ALL MENU ITEMS ERROR:", err);
+
+    return res.status(500).json({
+      message,
+    });
   }
 };
 

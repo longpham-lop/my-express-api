@@ -1,5 +1,5 @@
-
 import { Router } from "express";
+
 import {
   getMyOrderItems,
   createOrderItem,
@@ -7,19 +7,61 @@ import {
   updateOrderItem,
   updateOrderItemStatus,
 } from "../controllers/OrderItemController";
-import { authMiddleware } from "../middlewares/auth.middleware";
+
+import {
+  authMiddleware,
+} from "../middlewares/auth.middleware";
 
 const router = Router();
 
-router.get("/", authMiddleware, getMyOrderItems); 
-router.post("/", authMiddleware, createOrderItem);
-router.delete("/:id", authMiddleware, deleteOrderItem);
-router.put("/:id", authMiddleware, updateOrderItem);
+/*
+ * Tất cả endpoint OrderItem đều yêu cầu đăng nhập.
+ */
 
-// Cập nhật trạng thái món: pending → cooking → ready → served
+router.use(authMiddleware);
+
+/*
+ * GET /api/order-items
+ * Lấy danh sách món của khách hàng.
+ */
+router.get(
+  "/",
+  getMyOrderItems
+);
+
+/*
+ * POST /api/order-items
+ * Thêm món vào Order.
+ */
+router.post(
+  "/",
+  createOrderItem
+);
+
+/*
+ * PUT /api/order-items/:id
+ * Cập nhật số lượng món.
+ */
+router.put(
+  "/:id",
+  updateOrderItem
+);
+
+/*
+ * DELETE /api/order-items/:id
+ * Hủy món, không xóa vật lý.
+ */
+router.delete(
+  "/:id",
+  deleteOrderItem
+);
+
+/*
+ * PUT /api/order-items/:id/status
+ * Cập nhật trạng thái món.
+ */
 router.put(
   "/:id/status",
-  authMiddleware,
   updateOrderItemStatus
 );
 

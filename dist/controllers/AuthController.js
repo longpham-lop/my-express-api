@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.register = exports.login = void 0;
+exports.changePasswordFromLogin = exports.changePassword = exports.register = exports.login = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const models_1 = require("../models");
 const bcrypt_1 = __importDefault(require("bcrypt"));
@@ -139,10 +139,154 @@ const register = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         });
     }
     catch (err) {
-        console.log("register error:", err);
+        console.error("register error:", err);
+        const errorMessage = err instanceof Error
+            ? err.message
+            : "Đã xảy ra lỗi khi đăng ký tài khoản";
         return res.status(500).json({
-            error: err.message,
+            error: errorMessage,
         });
     }
 });
 exports.register = register;
+const changePassword = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        // 1. Phải đăng nhập mới được đổi mật khẩu
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Vui lòng đăng nhập",
+            });
+        }
+        const { currentPassword, newPassword, confirmPassword, } = req.body;
+        // 2. Kiểm tra dữ liệu đầu vào
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            return res.status(400).json({
+                message: "Vui lòng nhập đầy đủ các trường mật khẩu",
+            });
+        }
+        if (typeof currentPassword !== "string" ||
+            typeof newPassword !== "string" ||
+            typeof confirmPassword !== "string") {
+            return res.status(400).json({
+                message: "Dữ liệu mật khẩu không hợp lệ",
+            });
+        }
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                message: "Mật khẩu mới phải có ít nhất 8 ký tự",
+            });
+        }
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                message: "Mật khẩu xác nhận không khớp",
+            });
+        }
+        // 3. Lấy tài khoản từ danh tính trong JWT
+        const user = yield models_1.User.findByPk(req.user.id);
+        if (!user) {
+            return res.status(404).json({
+                message: "Không tìm thấy tài khoản",
+            });
+        }
+        if (user.status !== "active") {
+            return res.status(403).json({
+                message: "Tài khoản đã bị vô hiệu hóa",
+            });
+        }
+        // 4. Kiểm tra mật khẩu hiện tại bằng bcrypt
+        const isMatch = yield bcrypt_1.default.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(400).json({
+                message: "Mật khẩu hiện tại không chính xác",
+            });
+        }
+        // 5. Không cho đặt lại chính mật khẩu hiện tại
+        const isSamePassword = yield bcrypt_1.default.compare(newPassword, user.password);
+        if (isSamePassword) {
+            return res.status(400).json({
+                message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+            });
+        }
+        // 6. Mã hóa và cập nhật mật khẩu mới
+        const hashedPassword = yield bcrypt_1.default.hash(newPassword, 10);
+        user.password = hashedPassword;
+        yield user.save();
+        return res.status(200).json({
+            message: "Đổi mật khẩu thành công",
+        });
+    }
+    catch (err) {
+        console.error("Change password error:", err);
+        return res.status(500).json({
+            message: "Lỗi server khi đổi mật khẩu",
+        });
+    }
+});
+exports.changePassword = changePassword;
+const changePasswordFromLogin = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { email, currentPassword, newPassword, confirmPassword } = req.body;
+        if (typeof email !== "string" ||
+            typeof currentPassword !== "string" ||
+            typeof newPassword !== "string" ||
+            typeof confirmPassword !== "string" ||
+            !email.trim() ||
+            !currentPassword ||
+            !newPassword ||
+            !confirmPassword) {
+            return res.status(400).json({
+                message: "Vui lòng nhập đầy đủ thông tin",
+            });
+        }
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                message: "Mật khẩu mới phải có ít nhất 8 ký tự",
+            });
+        }
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                message: "Mật khẩu xác nhận không khớp",
+            });
+        }
+        if (currentPassword === newPassword) {
+            return res.status(400).json({
+                message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+            });
+        }
+        const user = yield models_1.User.findOne({
+            where: {
+                email: email.trim(),
+            },
+        });
+        // Không tiết lộ email có tồn tại hay không
+        if (!user || user.status !== "active") {
+            return res.status(400).json({
+                message: "Thông tin tài khoản hoặc mật khẩu không chính xác",
+            });
+        }
+        const isCurrentPasswordValid = yield bcrypt_1.default.compare(currentPassword, user.password);
+        if (!isCurrentPasswordValid) {
+            return res.status(400).json({
+                message: "Thông tin tài khoản hoặc mật khẩu không chính xác",
+            });
+        }
+        const isSamePassword = yield bcrypt_1.default.compare(newPassword, user.password);
+        if (isSamePassword) {
+            return res.status(400).json({
+                message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+            });
+        }
+        user.password = yield bcrypt_1.default.hash(newPassword, 10);
+        yield user.save();
+        return res.status(200).json({
+            message: "Đổi mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.",
+        });
+    }
+    catch (error) {
+        console.error("CHANGE PASSWORD FROM LOGIN ERROR:", error);
+        return res.status(500).json({
+            message: "Lỗi máy chủ khi đổi mật khẩu",
+        });
+    }
+});
+exports.changePasswordFromLogin = changePasswordFromLogin;

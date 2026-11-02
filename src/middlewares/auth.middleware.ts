@@ -1,5 +1,6 @@
+
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
+import jwt, { JwtPayload as JsonWebTokenPayload } from "jsonwebtoken";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -9,19 +10,30 @@ export interface AuthRequest extends Request {
   };
 }
 
-interface JwtPayload {
+interface AppJwtPayload extends JsonWebTokenPayload {
   id: number;
   role: string;
-  branchId: number | null;
+  branchId?: number | null;
 }
 
-export const authMiddleware = async (
+export const authMiddleware = (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    // 1. Lấy Authorization header
+    // 1. Kiểm tra cấu hình JWT_SECRET
+    const secret = process.env.JWT_SECRET;
+
+    if (!secret) {
+      console.error("JWT_SECRET chưa được cấu hình");
+
+      return res.status(500).json({
+        message: "Lỗi cấu hình xác thực máy chủ",
+      });
+    }
+
+    // 2. Lấy Authorization header
     const authorization = req.headers.authorization;
 
     if (!authorization) {
@@ -30,10 +42,14 @@ export const authMiddleware = async (
       });
     }
 
-    // 2. Kiểm tra Bearer token
+    // 3. Kiểm tra định dạng Bearer token
     const parts = authorization.split(" ");
 
-    if (parts.length !== 2 || parts[0] !== "Bearer") {
+    if (
+      parts.length !== 2 ||
+      parts[0] !== "Bearer" ||
+      !parts[1]
+    ) {
       return res.status(401).json({
         message: "Token không hợp lệ",
       });
@@ -41,29 +57,57 @@ export const authMiddleware = async (
 
     const token = parts[1];
 
-    // 3. Verify JWT
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET!
-    ) as JwtPayload;
+    // 4. Xác thực chữ ký và thời hạn token
+    const decoded = jwt.verify(token, secret);
 
-    console.log("========== JWT ==========");
-    console.log("User ID:", decoded.id);
-    console.log("Role:", decoded.role);
-    console.log("Branch ID:", decoded.branchId);
-    console.log("=========================");
+    // Payload JWT có thể là chuỗi, cần kiểm tra trước khi đọc thuộc tính
+    if (
+      typeof decoded !== "object" ||
+      decoded === null
+    ) {
+      return res.status(401).json({
+        message: "Dữ liệu token không hợp lệ",
+      });
+    }
 
-    // 4. Lưu thông tin user vào request
+    const payload = decoded as AppJwtPayload;
+
+    // 5. Kiểm tra các trường bắt buộc
+    if (
+      !Number.isInteger(payload.id) ||
+      payload.id <= 0 ||
+      typeof payload.role !== "string" ||
+      payload.role.trim() === ""
+    ) {
+      return res.status(401).json({
+        message: "Thông tin người dùng trong token không hợp lệ",
+      });
+    }
+
+    const branchId = payload.branchId ?? null;
+
+    if (
+      branchId !== null &&
+      (!Number.isInteger(branchId) || branchId <= 0)
+    ) {
+      return res.status(401).json({
+        message: "Chi nhánh trong token không hợp lệ",
+      });
+    }
+
+    // 6. Gắn thông tin xác thực vào request
     req.user = {
-      id: decoded.id,
-      role: decoded.role,
-      branchId: decoded.branchId ?? null,
+      id: payload.id,
+      role: payload.role,
+      branchId,
     };
 
-    // 5. Cho request đi tiếp
+    // 7. Cho phép request đi tiếp
     next();
-  } catch (err) {
-    console.log("JWT ERROR:", err);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      console.error("JWT ERROR:", err.message);
+    }
 
     return res.status(401).json({
       message: "Token không hợp lệ hoặc đã hết hạn",

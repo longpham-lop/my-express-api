@@ -1,4 +1,9 @@
-import { DataTypes, Model, Optional } from "sequelize";
+import {
+  DataTypes,
+  Model,
+  Optional,
+} from "sequelize";
+
 import sequelize from "../config/db";
 
 export type OrderItemStatus =
@@ -7,22 +12,26 @@ export type OrderItemStatus =
   | "ready"
   | "served"
   | "cancelled";
+
 export interface OrderItemAttributes {
   id?: number;
   order_id: number;
   menu_item_id: number;
   quantity: number;
   unit_price: number;
-  status?: OrderItemStatus; 
+  status?: OrderItemStatus;
 }
 
 type OrderItemCreationAttributes = Optional<
   OrderItemAttributes,
-  "id"
+  "id" | "status"
 >;
 
 class OrderItem
-  extends Model<OrderItemAttributes, OrderItemCreationAttributes>
+  extends Model<
+    OrderItemAttributes,
+    OrderItemCreationAttributes
+  >
   implements OrderItemAttributes
 {
   public id!: number;
@@ -34,7 +43,7 @@ class OrderItem
   public quantity!: number;
 
   public unit_price!: number;
-  
+
   public status!: OrderItemStatus;
 
   public readonly createdAt!: Date;
@@ -63,12 +72,19 @@ OrderItem.init(
     quantity: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      validate: {
+        min: 1,
+      },
     },
 
     unit_price: {
       type: DataTypes.FLOAT,
       allowNull: false,
+      validate: {
+        min: 0,
+      },
     },
+
     status: {
       type: DataTypes.ENUM(
         "pending",
@@ -77,9 +93,9 @@ OrderItem.init(
         "served",
         "cancelled"
       ),
-      allowNull: true,
+      allowNull: false,
       defaultValue: "pending",
-    }
+    },
   },
   {
     sequelize,

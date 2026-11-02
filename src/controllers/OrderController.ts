@@ -1,15 +1,24 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 
 import Order from "../models/Order";
 import Reservation from "../models/Reservation";
 import OrderItem from "../models/OrderItem";
 import MenuItem from "../models/Menu";
-import TableModel from "../models/Table";
 import Branch from "../models/Branch";
 
-import { AuthRequest } from "../middlewares/auth.middleware";
+import sequelize from "../config/db";
 
-const GLOBAL_ROLES = ["admin", "chain_manager"];
+import { AuthRequest } from "../middlewares/auth.middleware";
+import { getIO } from "../socket";
+
+/* =====================================================
+ * CONSTANTS
+ * ===================================================== */
+
+const GLOBAL_ROLES = [
+  "admin",
+  "chain_manager",
+];
 
 const ORDER_ROLES = [
   "admin",
@@ -19,51 +28,154 @@ const ORDER_ROLES = [
   "cashier",
 ];
 
-const isGlobalRole = (role?: string) => {
-  return !!role && GLOBAL_ROLES.includes(role);
+const MANAGER_ROLES = [
+  "admin",
+  "chain_manager",
+  "branch_manager",
+];
+
+/* =====================================================
+ * ROLE HELPERS
+ * ===================================================== */
+
+const isGlobalRole = (
+  role?: string
+): boolean => {
+  return (
+    !!role &&
+    GLOBAL_ROLES.includes(role)
+  );
 };
 
-const canManageOrders = (role?: string) => {
-  return !!role && ORDER_ROLES.includes(role);
+const canManageOrders = (
+  role?: string
+): boolean => {
+  return (
+    !!role &&
+    ORDER_ROLES.includes(role)
+  );
 };
 
-/**
- * Kiểm tra Branch Manager có đang truy cập đúng chi nhánh không.
- */
+const isManagerRole = (
+  role?: string
+): boolean => {
+  return (
+    !!role &&
+    MANAGER_ROLES.includes(role)
+  );
+};
+
+/* =====================================================
+ * VALIDATION HELPERS
+ * ===================================================== */
+
+const isValidPositiveId = (
+  value: unknown
+): boolean => {
+  const numberValue = Number(value);
+
+  return (
+    Number.isInteger(numberValue) &&
+    numberValue > 0
+  );
+};
+
+/* =====================================================
+ * BRANCH PERMISSION
+ * ===================================================== */
+
 const canAccessBranch = (
   role: string,
   userBranchId: number | null | undefined,
   orderBranchId: number | null | undefined
-) => {
+): boolean => {
   if (isGlobalRole(role)) {
     return true;
   }
 
-  if (role === "branch_manager") {
-    return (
-      userBranchId !== null &&
-      userBranchId !== undefined &&
-      orderBranchId === userBranchId
-    );
+  if (
+    role !== "branch_manager" &&
+    role !== "waiter" &&
+    role !== "cashier"
+  ) {
+    return false;
   }
 
-  return true;
+  if (
+    userBranchId == null ||
+    orderBranchId == null
+  ) {
+    return false;
+  }
+
+  const currentBranchId =
+    Number(userBranchId);
+
+  const targetBranchId =
+    Number(orderBranchId);
+
+  return (
+    Number.isInteger(currentBranchId) &&
+    currentBranchId > 0 &&
+    Number.isInteger(targetBranchId) &&
+    targetBranchId > 0 &&
+    currentBranchId === targetBranchId
+  );
 };
+
+/* =====================================================
+ * SOCKET HELPER
+ * ===================================================== */
+
+
+/* =====================================================
+ * SOCKET HELPER
+ * ===================================================== */
+
+const emitOrderUpdated = (
+  orderId: number,
+  status: string,
+  branchId: number | null | undefined
+): void => {
+  try {
+    const io = getIO();
+
+    const rooms = branchId != null
+      ? io.to(`branch:${branchId}`).to("role:global")
+      : io.to("role:global");
+
+    rooms.emit("order-status-updated", {
+      order_id: orderId,
+      status,
+    });
+
+    rooms.emit("order-item-status-updated", {
+      order_id: orderId,
+      status,
+    });
+  } catch (error) {
+    console.warn(
+      "ORDER SOCKET WARNING:",
+      error
+    );
+  }
+};
+
+/* =====================================================
+ * GET ALL ORDERS
+ * ===================================================== */
 
 /**
  * GET /api/orders
  *
- * admin / chain_manager:
- *   xem tất cả
+ * Admin / Chain Manager:
+ * - Xem toàn bộ đơn hàng.
  *
- * branch_manager:
- *   chỉ xem order của chi nhánh mình
+ * Branch Manager / Waiter / Cashier:
+ * - Chỉ xem đơn của chi nhánh mình.
  *
- * waiter / cashier:
- *   chỉ xem order của chi nhánh mình
- *
- * user:
- *   chỉ xem order của chính mình
+ * User / Customer:
+ * - Chỉ xem đơn của chính mình.
  */
 export const getAllOrders = async (
   req: AuthRequest,
@@ -76,26 +188,38 @@ export const getAllOrders = async (
       });
     }
 
-    const { id, role, branchId } = req.user;
+    const {
+      id,
+      role,
+      branchId,
+    } = req.user;
 
     if (canManageOrders(role)) {
-      const whereCondition: Record<string, unknown> = {
+      const whereCondition: Record<
+        string,
+        unknown
+      > = {
         is_deleted: false,
       };
 
       if (!isGlobalRole(role)) {
-        if (!branchId) {
+        if (branchId == null) {
           return res.status(403).json({
-            message: "Tài khoản chưa được gán chi nhánh",
+            message:
+              "Tài khoản chưa được gán chi nhánh",
           });
         }
 
-        whereCondition.branch_id = branchId;
+        whereCondition.branch_id =
+          Number(branchId);
       }
 
       const orders = await Order.findAll({
         where: whereCondition,
-        order: [["createdAt", "DESC"]],
+
+        order: [
+          ["createdAt", "DESC"],
+        ],
 
         include: [
           {
@@ -105,32 +229,54 @@ export const getAllOrders = async (
               {
                 model: MenuItem,
                 as: "menu",
-                attributes: ["id", "name", "price", "image"],
+                attributes: [
+                  "id",
+                  "name",
+                  "price",
+                  "image",
+                ],
               },
             ],
           },
+
           {
             model: Branch,
             as: "branch",
-            attributes: ["id", "name", "code"],
+            attributes: [
+              "id",
+              "name",
+              "code",
+            ],
             required: false,
           },
         ],
       });
 
-      return res.json(orders);
+      return res.status(200).json(orders);
     }
 
-    /**
-     * User/customer:
-     * chỉ xem order của chính mình.
+    /*
+     * Customer chỉ xem đơn của chính mình.
      */
+    if (
+      role !== "user" &&
+      role !== "customer"
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xem danh sách đơn hàng",
+      });
+    }
+
     const orders = await Order.findAll({
       where: {
         user_id: id,
         is_deleted: false,
       },
-      order: [["createdAt", "DESC"]],
+
+      order: [
+        ["createdAt", "DESC"],
+      ],
 
       include: [
         {
@@ -140,32 +286,48 @@ export const getAllOrders = async (
             {
               model: MenuItem,
               as: "menu",
-              attributes: ["id", "name", "price", "image"],
+              attributes: [
+                "id",
+                "name",
+                "price",
+                "image",
+              ],
             },
           ],
         },
+
         {
           model: Branch,
           as: "branch",
-          attributes: ["id", "name", "code"],
+          attributes: [
+            "id",
+            "name",
+            "code",
+          ],
+          required: false,
         },
       ],
     });
 
-    return res.json(orders);
-  } catch (err: unknown) {
-    console.error("GET ORDERS ERROR:", err);
-
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể lấy danh sách đơn hàng";
+    return res.status(200).json(orders);
+  } catch (error: unknown) {
+    console.error(
+      "GET ORDERS ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể lấy danh sách đơn hàng",
     });
   }
 };
+
+/* =====================================================
+ * GET ORDER BY ID
+ * ===================================================== */
 
 /**
  * GET /api/orders/:id
@@ -183,7 +345,7 @@ export const getOrderById = async (
 
     const id = Number(req.params.id);
 
-    if (isNaN(id)) {
+    if (!isValidPositiveId(id)) {
       return res.status(400).json({
         message: "ID không hợp lệ",
       });
@@ -198,148 +360,117 @@ export const getOrderById = async (
             {
               model: MenuItem,
               as: "menu",
-              attributes: ["id", "name", "price", "image"],
+              attributes: [
+                "id",
+                "name",
+                "price",
+                "image",
+              ],
               required: false,
             },
           ],
         },
+
         {
           model: Branch,
           as: "branch",
-          attributes: ["id", "name", "code"],
+          attributes: [
+            "id",
+            "name",
+            "code",
+          ],
+          required: false,
         },
       ],
     });
 
-    if (!order) {
+    if (!order || order.is_deleted) {
       return res.status(404).json({
         message: "Order không tồn tại",
       });
     }
 
-    /**
-     * Không cho xem order đã soft delete.
-     */
-    if (order.is_deleted) {
-      return res.status(404).json({
-        message: "Order không tồn tại",
-      });
+    const role = req.user.role;
+
+    if (isGlobalRole(role)) {
+      return res.status(200).json(order);
     }
 
-    /**
-     * Admin / Chain Manager
-     */
-    if (isGlobalRole(req.user.role)) {
-      return res.json(order);
-    }
+    if (canManageOrders(role)) {
+      const allowed = canAccessBranch(
+        role,
+        req.user.branchId,
+        order.branch_id
+      );
 
-    /**
-     * Branch Manager / Waiter / Cashier
-     */
-    if (canManageOrders(req.user.role)) {
-      if (
-        !canAccessBranch(
-          req.user.role,
-          req.user.branchId,
-          order.branch_id
-        )
-      ) {
+      if (!allowed) {
         return res.status(403).json({
           message:
-            "Bạn không có quyền xem order của chi nhánh khác",
+            "Bạn không có quyền xem Order của chi nhánh khác",
         });
       }
 
-      return res.json(order);
+      return res.status(200).json(order);
     }
 
-    /**
-     * User
-     */
-    if (order.user_id !== req.user.id) {
+    if (
+      role !== "user" &&
+      role !== "customer"
+    ) {
       return res.status(403).json({
-        message: "Bạn không có quyền xem order này",
+        message:
+          "Bạn không có quyền xem Order này",
       });
     }
 
-    return res.json(order);
-  } catch (err: unknown) {
-    console.error("GET ORDER DETAIL ERROR:", err);
+    if (
+      Number(order.user_id) !==
+      Number(req.user.id)
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xem Order của người khác",
+      });
+    }
 
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể lấy chi tiết order";
+    return res.status(200).json(order);
+  } catch (error: unknown) {
+    console.error(
+      "GET ORDER DETAIL ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể lấy chi tiết Order",
     });
   }
 };
 
-/**
- * GET /api/orders/orders/:id
+/*
+ * Tương thích với endpoint cũ.
  *
- * Giữ lại endpoint cũ để tránh phá frontend hiện tại.
+ * Endpoint cũ vẫn phải gắn authMiddleware.
  */
-export const getOrderDetail = async (
-  req: Request,
-  res: Response
-) => {
-  try {
-    const id = Number(req.params.id);
+export const getOrderDetail = getOrderById;
 
-    if (isNaN(id)) {
-      return res.status(400).json({
-        message: "ID không hợp lệ",
-      });
-    }
-
-    const order = await Order.findByPk(id, {
-      include: [
-        {
-          model: OrderItem,
-          as: "items",
-          include: [
-            {
-              model: MenuItem,
-              as: "menu",
-              attributes: ["id", "name", "price", "image"],
-            },
-          ],
-        },
-      ],
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        message: "Order không tồn tại",
-      });
-    }
-
-    return res.json(order);
-  } catch (err: unknown) {
-    console.error("GET ORDER DETAIL ERROR:", err);
-
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể lấy order";
-
-    return res.status(500).json({
-      message,
-    });
-  }
-};
+/* =====================================================
+ * CREATE ORDER
+ * ===================================================== */
 
 /**
  * POST /api/orders
  *
- * Order có reservation:
- *   lấy branch_id từ reservation.
+ * Nếu có reservation_id:
+ * - Lấy branch_id từ Reservation.
  *
- * Nhân viên:
- *   lấy branch_id từ JWT.
+ * Nếu là nhân viên chi nhánh:
+ * - Lấy branch_id từ JWT.
+ *
+ * total_price luôn bắt đầu bằng 0.
+ * Backend sẽ tính lại khi thêm OrderItem.
  */
 export const createOrder = async (
   req: AuthRequest,
@@ -352,216 +483,190 @@ export const createOrder = async (
       });
     }
 
-    const {
-      reservation_id,
-      total_price,
-    } = req.body;
+    const reservationId =
+      req.body.reservation_id;
 
     if (
-      total_price === undefined ||
-      total_price === null ||
-      Number(total_price) < 0
+      reservationId != null &&
+      !isValidPositiveId(reservationId)
     ) {
       return res.status(400).json({
-        message: "total_price không hợp lệ",
+        message:
+          "Reservation ID không hợp lệ",
       });
     }
 
-    let finalBranchId: number | null = null;
+    let finalBranchId:
+      number | null = null;
 
-    /**
-     * Nếu order thuộc reservation,
-     * branch lấy trực tiếp từ reservation.
-     */
-    if (reservation_id) {
-      const reservation =
-        await Reservation.findByPk(reservation_id);
+    let reservation:
+      | Reservation
+      | null = null;
+
+    if (reservationId != null) {
+      reservation =
+        await Reservation.findByPk(
+          Number(reservationId)
+        );
 
       if (!reservation) {
         return res.status(404).json({
-          message: "Reservation không tồn tại",
+          message:
+            "Reservation không tồn tại",
         });
       }
 
-      finalBranchId = reservation.branch_id ?? null;
+      finalBranchId =
+        reservation.branch_id ?? null;
     }
 
-    /**
-     * Nếu là nhân viên chi nhánh
-     * và chưa có branch từ reservation,
-     * lấy branch từ JWT.
-     */
-   const currentBranchId = req.user.branchId;
+    const role = req.user.role;
 
-    if (!finalBranchId && currentBranchId) {
-      finalBranchId = currentBranchId;
-    }
-
-    /**
-     * Nhân viên chi nhánh bắt buộc phải có branch.
+    /*
+     * Nhân viên chi nhánh phải sử dụng
+     * Reservation thuộc đúng chi nhánh.
      */
     if (
-      canManageOrders(req.user.role) &&
-      !isGlobalRole(req.user.role) &&
-      !finalBranchId
+      reservation &&
+      canManageOrders(role) &&
+      !isGlobalRole(role)
     ) {
-      return res.status(403).json({
-        message: "Tài khoản chưa được gán chi nhánh",
-      });
-    }
-
-    /**
-     * Kiểm tra reservation thuộc đúng branch
-     * của Branch Manager.
-     */
-    if (
-      reservation_id &&
-      req.user.role === "branch_manager"
-    ) {
-      const reservation =
-        await Reservation.findByPk(reservation_id);
-
       if (
-        !reservation ||
-        reservation.branch_id !== req.user.branchId
+        req.user.branchId == null ||
+        Number(reservation.branch_id) !==
+          Number(req.user.branchId)
       ) {
         return res.status(403).json({
           message:
-            "Bạn không có quyền tạo order cho chi nhánh khác",
+            "Bạn không có quyền tạo Order cho Reservation thuộc chi nhánh khác",
         });
       }
+    }
+
+    /*
+     * Nếu chưa lấy được branch từ Reservation,
+     * sử dụng branch trong JWT.
+     */
+    if (
+      finalBranchId == null &&
+      req.user.branchId != null
+    ) {
+      finalBranchId =
+        Number(req.user.branchId);
+    }
+
+    /*
+     * Nhân viên chi nhánh bắt buộc có branch.
+     */
+    if (
+      canManageOrders(role) &&
+      !isGlobalRole(role) &&
+      finalBranchId == null
+    ) {
+      return res.status(403).json({
+        message:
+          "Tài khoản chưa được gán chi nhánh",
+      });
     }
 
     const order = await Order.create({
       branch_id: finalBranchId,
       user_id: req.user.id,
-      reservation_id: reservation_id || null,
-      total_price: Number(total_price),
+      reservation_id:
+        reservation?.id ?? null,
+      total_price: 0,
       status: "pending",
       is_deleted: false,
     });
 
-    return res.status(201).json(order);
-  } catch (err: unknown) {
-    console.error("CREATE ORDER ERROR:", err);
+    emitOrderUpdated(
+      order.id,
+      order.status,
+      order.branch_id ?? null
+    );
 
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể tạo order";
+    return res.status(201).json({
+      message: "Tạo Order thành công",
+      data: order,
+    });
+  } catch (error: unknown) {
+    console.error(
+      "CREATE ORDER ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể tạo Order",
     });
   }
 };
 
+/* =====================================================
+ * UPDATE ORDER STATUS
+ * ===================================================== */
+
 /**
  * PUT /api/orders/:id/status
- */
-/**
- * PUT /api/orders/:id/status
  *
- * Quy tắc:
+ * API này chỉ cho phép hủy Order.
  *
- * pending
- *   ↓
- * processing
- *   ↓
- * completed
- *
- * Không được completed nếu còn món:
- * - pending
- * - cooking
- * - ready
- *
- * Món chỉ được xem là hoàn tất khi:
- * - served
- * - cancelled
+ * processing và completed được đồng bộ
+ * tự động từ OrderItem.
  */
 export const updateOrderStatus = async (
   req: AuthRequest,
   res: Response
 ) => {
+  if (!req.user) {
+    return res.status(401).json({
+      message: "Chưa đăng nhập",
+    });
+  }
+
+  const id = Number(req.params.id);
+
+  if (!isValidPositiveId(id)) {
+    return res.status(400).json({
+      message: "ID không hợp lệ",
+    });
+  }
+
+  if (!isManagerRole(req.user.role)) {
+    return res.status(403).json({
+      message:
+        "Bạn không có quyền hủy Order",
+    });
+  }
+
+  if (req.body.status !== "cancelled") {
+    return res.status(400).json({
+      message:
+        "Trạng thái Order được đồng bộ tự động. API này chỉ hỗ trợ hủy Order.",
+    });
+  }
+
+  const transaction =
+    await sequelize.transaction();
+
   try {
-    /*
-     * =====================================================
-     * 1. KIỂM TRA ĐĂNG NHẬP
-     * =====================================================
-     */
-
-    if (!req.user) {
-      return res.status(401).json({
-        message: "Chưa đăng nhập",
-      });
-    }
-
-    /*
-     * =====================================================
-     * 2. KIỂM TRA ID
-     * =====================================================
-     */
-
-    const id = Number(req.params.id);
-
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({
-        message: "ID không hợp lệ",
-      });
-    }
-
-    /*
-     * =====================================================
-     * 3. KIỂM TRA QUYỀN
-     * =====================================================
-     */
-
-    if (!canManageOrders(req.user.role)) {
-      return res.status(403).json({
-        message: "Bạn không có quyền cập nhật order",
-      });
-    }
-
-    /*
-     * =====================================================
-     * 4. KIỂM TRA STATUS
-     * =====================================================
-     */
-
-    const { status } = req.body;
-
-    const allowedStatuses = [
-      "pending",
-      "processing",
-      "completed",
-      "cancelled",
-    ] as const;
-
-    if (!allowedStatuses.includes(status)) {
-      return res.status(400).json({
-        message: "Trạng thái order không hợp lệ",
-      });
-    }
-
-    /*
-     * =====================================================
-     * 5. TÌM ORDER
-     * =====================================================
-     */
-
-    const order = await Order.findByPk(id);
+    const order = await Order.findByPk(
+      id,
+      {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }
+    );
 
     if (!order || order.is_deleted) {
+      await transaction.rollback();
+
       return res.status(404).json({
         message: "Order không tồn tại",
       });
     }
-
-    /*
-     * =====================================================
-     * 6. KIỂM TRA CHI NHÁNH
-     * =====================================================
-     */
 
     if (
       !canAccessBranch(
@@ -570,234 +675,198 @@ export const updateOrderStatus = async (
         order.branch_id
       )
     ) {
+      await transaction.rollback();
+
       return res.status(403).json({
         message:
-          "Bạn không có quyền cập nhật order của chi nhánh khác",
+          "Bạn không có quyền hủy Order của chi nhánh khác",
       });
     }
 
-    /*
-     * =====================================================
-     * 7. KHÔNG CHO HOÀN THÀNH ORDER KHI MÓN CHƯA XONG
-     * =====================================================
-     *
-     * Đây là phần quan trọng nhất.
-     *
-     * Phải kiểm tra TRƯỚC khi order.update().
-     */
+    if (
+      order.status === "completed" ||
+      order.status === "cancelled"
+    ) {
+      await transaction.rollback();
 
-    if (status === "completed") {
-      const items = await OrderItem.findAll({
-        where: {
-          order_id: order.id,
-        },
+      return res.status(400).json({
+        message:
+          "Không thể hủy Order đã hoàn tất hoặc đã hủy",
       });
-
-      /*
-      * Order phải có ít nhất 1 món
-      */
-      if (items.length === 0) {
-        return res.status(400).json({
-          message:
-            "Không thể hoàn thành đơn hàng khi đơn chưa có món",
-        });
-      }
-
-      /*
-      * Nếu tất cả món đều bị hủy
-      * thì Order phải là cancelled,
-      * không được chuyển completed.
-      */
-      const allCancelled = items.every(
-        (item) => item.status === "cancelled"
-      );
-
-      if (allCancelled) {
-        return res.status(400).json({
-          message:
-            "Không thể hoàn thành đơn hàng vì tất cả món đều đã bị hủy",
-        });
-      }
-
-      /*
-      * Tìm món chưa hoàn thành.
-      *
-      * Chỉ:
-      * - served
-      * - cancelled
-      *
-      * mới được coi là hoàn tất.
-      */
-      const unfinishedItems = items.filter(
-        (item) =>
-          item.status !== "served" &&
-          item.status !== "cancelled"
-      );
-
-      if (unfinishedItems.length > 0) {
-        return res.status(400).json({
-          message:
-            "Không thể hoàn thành đơn khi vẫn còn món chưa phục vụ",
-        });
-      }
     }
 
-    /*
-     * =====================================================
-     * 8. CẬP NHẬT ORDER
-     * =====================================================
-     */
+    const items = await OrderItem.findAll({
+      where: {
+        order_id: order.id,
+      },
 
-    await order.update({
-      status,
+      transaction,
+
+      lock: transaction.LOCK.UPDATE,
     });
 
     /*
-     * =====================================================
-     * 9. ĐỒNG BỘ RESERVATION
-     * =====================================================
+     * Không cho hủy toàn bộ đơn
+     * nếu đã có món được phục vụ.
      */
+    const hasServedItem = items.some(
+      (item) => item.status === "served"
+    );
 
+    if (hasServedItem) {
+      await transaction.rollback();
+
+      return res.status(400).json({
+        message:
+          "Order đã có món được phục vụ. Không thể hủy toàn bộ Order.",
+      });
+    }
+
+    /*
+     * Chuyển tất cả món chưa phục vụ
+     * sang trạng thái cancelled.
+     */
+    for (const item of items) {
+      if (item.status !== "cancelled") {
+        await item.update(
+          {
+            status: "cancelled",
+          },
+          {
+            transaction,
+          }
+        );
+      }
+    }
+
+    await order.update(
+      {
+        status: "cancelled",
+        total_price: 0,
+      },
+      {
+        transaction,
+      }
+    );
+
+    /*
+     * Đồng bộ Reservation.
+     */
     if (order.reservation_id) {
       const reservation =
         await Reservation.findByPk(
-          order.reservation_id
+          order.reservation_id,
+          {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+          }
         );
 
       if (reservation) {
-        let reservationStatus =
-          reservation.status;
-
-        /*
-         * Order bắt đầu xử lý
-         */
-        if (status === "processing") {
-          reservationStatus = "confirmed";
-        }
-
-        /*
-         * Order hoàn thành
-         */
-        if (status === "completed") {
-          reservationStatus = "completed";
-        }
-
-        /*
-         * Order bị hủy
-         */
-        if (status === "cancelled") {
-          reservationStatus = "cancelled";
-        }
-
-        await reservation.update({
-          status: reservationStatus,
-        });
-      }
-    }
-
-    /*
-     * =====================================================
-     * 10. TRẢ BÀN VỀ AVAILABLE
-     * =====================================================
-     *
-     * Chỉ xử lý khi Order hoàn thành.
-     */
-
-    if (
-      status === "completed" &&
-      order.reservation_id
-    ) {
-      const reservation =
-        await Reservation.findByPk(
-          order.reservation_id
+        await reservation.update(
+          {
+            status: "cancelled",
+          },
+          {
+            transaction,
+          }
         );
-
-      if (reservation && reservation.table_id) {
-        const table =
-          await TableModel.findByPk(
-            reservation.table_id
-          );
-
-        if (table) {
-          await table.update({
-            status: "available",
-          });
-        }
       }
     }
 
-    /*
-     * =====================================================
-     * 11. RESPONSE
-     * =====================================================
-     */
+    await transaction.commit();
 
-    return res.json({
-      message: "Cập nhật order thành công",
-      order,
-    });
-  } catch (err: unknown) {
-    console.error(
-      "UPDATE ORDER STATUS ERROR:",
-      err
+    emitOrderUpdated(
+      order.id,
+      "cancelled",
+      order.branch_id ?? null
     );
 
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể cập nhật order";
+    return res.status(200).json({
+      message: "Hủy Order thành công",
+
+      order: {
+        id: order.id,
+        status: "cancelled",
+        total_price: 0,
+      },
+    });
+  } catch (error: unknown) {
+    try {
+      await transaction.rollback();
+    } catch {
+      // Transaction có thể đã kết thúc.
+    }
+
+    console.error(
+      "UPDATE ORDER STATUS ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể hủy Order",
     });
   }
 };
 
+/* =====================================================
+ * DELETE ORDER
+ * ===================================================== */
+
 /**
  * DELETE /api/orders/:id
  *
- * Soft delete.
+ * Chỉ cho phép quản lý.
+ * Chỉ xóa mềm đơn đã hoàn thành hoặc đã hủy.
  */
 export const deleteOrder = async (
   req: AuthRequest,
   res: Response
 ) => {
+  if (!req.user) {
+    return res.status(401).json({
+      message: "Chưa đăng nhập",
+    });
+  }
+
+  const id = Number(req.params.id);
+
+  if (!isValidPositiveId(id)) {
+    return res.status(400).json({
+      message: "ID không hợp lệ",
+    });
+  }
+
+  if (!isManagerRole(req.user.role)) {
+    return res.status(403).json({
+      message:
+        "Bạn không có quyền xóa Order",
+    });
+  }
+
+  const transaction =
+    await sequelize.transaction();
+
   try {
-    if (!req.user) {
-      return res.status(401).json({
-        message: "Chưa đăng nhập",
-      });
-    }
-
-    const id = Number(req.params.id);
-
-    if (isNaN(id)) {
-      return res.status(400).json({
-        message: "ID không hợp lệ",
-      });
-    }
-
-    /**
-     * Chỉ các role quản lý order
-     * mới được xóa.
-     */
-    if (!canManageOrders(req.user.role)) {
-      return res.status(403).json({
-        message: "Bạn không có quyền xóa order",
-      });
-    }
-
-    const order = await Order.findByPk(id);
+    const order = await Order.findByPk(
+      id,
+      {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      }
+    );
 
     if (!order || order.is_deleted) {
+      await transaction.rollback();
+
       return res.status(404).json({
         message: "Order không tồn tại",
       });
     }
 
-    /**
-     * Kiểm tra branch.
-     */
     if (
       !canAccessBranch(
         req.user.role,
@@ -805,32 +874,70 @@ export const deleteOrder = async (
         order.branch_id
       )
     ) {
+      await transaction.rollback();
+
       return res.status(403).json({
         message:
-          "Bạn không có quyền xóa order của chi nhánh khác",
+          "Bạn không có quyền xóa Order của chi nhánh khác",
       });
     }
 
-    await order.update({
-      is_deleted: true,
-    });
+    if (
+      order.status !== "completed" &&
+      order.status !== "cancelled"
+    ) {
+      await transaction.rollback();
 
-    return res.json({
-      message: "Xóa order thành công",
-    });
-  } catch (err: unknown) {
-    console.error("DELETE ORDER ERROR:", err);
+      return res.status(400).json({
+        message:
+          "Chỉ được xóa Order đã hoàn thành hoặc đã hủy",
+      });
+    }
 
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể xóa order";
+    await order.update(
+      {
+        is_deleted: true,
+      },
+      {
+        transaction,
+      }
+    );
+
+    await transaction.commit();
+
+    emitOrderUpdated(
+      order.id,
+      order.status,
+      order.branch_id ?? null
+    );
+
+    return res.status(200).json({
+      message: "Xóa Order thành công",
+    });
+  } catch (error: unknown) {
+    try {
+      await transaction.rollback();
+    } catch {
+      // Transaction có thể đã kết thúc.
+    }
+
+    console.error(
+      "DELETE ORDER ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể xóa Order",
     });
   }
 };
+
+/* =====================================================
+ * GET MY ORDERS
+ * ===================================================== */
 
 /**
  * GET /api/orders/my
@@ -851,20 +958,43 @@ export const getMyOrders = async (
         user_id: req.user.id,
         is_deleted: false,
       },
-      order: [["createdAt", "DESC"]],
+
+      order: [
+        ["createdAt", "DESC"],
+      ],
+
+      include: [
+        {
+          model: OrderItem,
+          as: "items",
+          include: [
+            {
+              model: MenuItem,
+              as: "menu",
+              attributes: [
+                "id",
+                "name",
+                "price",
+                "image",
+              ],
+            },
+          ],
+        },
+      ],
     });
 
-    return res.json(orders);
-  } catch (err: unknown) {
-    console.error("GET MY ORDERS ERROR:", err);
-
-    const message =
-      err instanceof Error
-        ? err.message
-        : "Không thể lấy order";
+    return res.status(200).json(orders);
+  } catch (error: unknown) {
+    console.error(
+      "GET MY ORDERS ERROR:",
+      error
+    );
 
     return res.status(500).json({
-      message,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Không thể lấy danh sách Order",
     });
   }
 };

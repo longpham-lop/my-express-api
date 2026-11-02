@@ -1,29 +1,113 @@
+
 import { Response } from "express";
 import bcrypt from "bcrypt";
+import { Op } from "sequelize";
 
 import User from "../models/User";
 import Role from "../models/Role";
 import Branch from "../models/Branch";
-
 import { AuthRequest } from "../middlewares/auth.middleware";
 
 /* =====================================================
-   HELPER
+   ROLE CONFIGURATION
 ===================================================== */
 
-const isGlobalRole = (role?: string) => {
-  return role === "admin" || role === "chain_manager";
+const GLOBAL_ROLES = ["admin", "chain_manager"];
+
+const STAFF_ROLES = ["waiter", "kitchen", "cashier"];
+
+const CHAIN_MANAGER_ALLOWED_ROLES = [
+  "branch_manager",
+  ...STAFF_ROLES,
+];
+
+const BRANCH_MANAGER_ALLOWED_ROLES = STAFF_ROLES;
+
+const isAdmin = (role?: string): boolean => role === "admin";
+
+const isChainManager = (role?: string): boolean =>
+  role === "chain_manager";
+
+const isBranchManager = (role?: string): boolean =>
+  role === "branch_manager";
+
+const isGlobalRole = (role?: string): boolean =>
+  GLOBAL_ROLES.includes(role ?? "");
+
+const isStaffRole = (role?: string): boolean =>
+  STAFF_ROLES.includes(role ?? "");
+
+const isBranchAssignedRole = (role?: string): boolean =>
+  role === "branch_manager" || isStaffRole(role);
+
+const isValidStatus = (
+  status: unknown
+): status is "active" | "inactive" =>
+  status === "active" || status === "inactive";
+
+const includeUserRelations = [
+  {
+    model: Role,
+    as: "role",
+    attributes: ["id", "name"],
+  },
+  {
+    model: Branch,
+    as: "branch",
+    attributes: ["id", "name", "code"],
+  },
+];
+
+/* =====================================================
+   CHECK TARGET USER PERMISSION
+===================================================== */
+
+const canManageTarget = (
+  currentRole: string | undefined,
+  targetRole: string
+): boolean => {
+  if (isAdmin(currentRole)) {
+    return true;
+  }
+
+  if (isChainManager(currentRole)) {
+    return CHAIN_MANAGER_ALLOWED_ROLES.includes(targetRole);
+  }
+
+  if (isBranchManager(currentRole)) {
+    return BRANCH_MANAGER_ALLOWED_ROLES.includes(targetRole);
+  }
+
+  return false;
 };
 
-const isBranchManager = (role?: string) => {
-  return role === "branch_manager";
+const canAssignRole = (
+  currentRole: string | undefined,
+  targetRole: string
+): boolean => {
+  if (isAdmin(currentRole)) {
+    return true;
+  }
+
+  if (isChainManager(currentRole)) {
+    return CHAIN_MANAGER_ALLOWED_ROLES.includes(targetRole);
+  }
+
+  if (isBranchManager(currentRole)) {
+    return BRANCH_MANAGER_ALLOWED_ROLES.includes(targetRole);
+  }
+
+  return false;
 };
 
 /* =====================================================
    CREATE USER
 ===================================================== */
 
-export const createUser = async (req: AuthRequest, res: Response) => {
+export const createUser = async (
+  req: AuthRequest,
+  res: Response
+) => {
   try {
     const {
       name,
@@ -34,152 +118,139 @@ export const createUser = async (req: AuthRequest, res: Response) => {
       status,
     } = req.body;
 
-    if (!name || !email || !password || !role_id) {
-      return res.status(400).json({
-        message: "name, email, password và role_id là bắt buộc",
-      });
-    }
-
     const currentRole = req.user?.role;
     const currentBranchId = req.user?.branchId;
 
-    /* =================================================
-       BRANCH MANAGER
-    ================================================= */
+    if (!name || !email || !password || role_id === undefined) {
+      return res.status(400).json({
+        message: "Vui lòng nhập đầy đủ họ tên, email, mật khẩu và vai trò",
+      });
+    }
+
+    if (
+      typeof name !== "string" ||
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !name.trim() ||
+      !email.trim() ||
+      password.length < 6
+    ) {
+      return res.status(400).json({
+        message: "Thông tin không hợp lệ hoặc mật khẩu phải có ít nhất 6 ký tự",
+      });
+    }
+
+    if (status !== undefined && !isValidStatus(status)) {
+      return res.status(400).json({
+        message: "Trạng thái chỉ được là active hoặc inactive",
+      });
+    }
+
+    const parsedRoleId = Number(role_id);
+
+    if (!Number.isInteger(parsedRoleId) || parsedRoleId <= 0) {
+      return res.status(400).json({
+        message: "Role ID không hợp lệ",
+      });
+    }
+
+    const role = await Role.findByPk(parsedRoleId);
+
+    if (!role) {
+      return res.status(400).json({
+        message: "Vai trò không tồn tại",
+      });
+    }
+
+    if (!canAssignRole(currentRole, role.name)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền tạo tài khoản với vai trò này",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existingUser = await User.findOne({
+      where: { email: normalizedEmail },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "Email đã tồn tại",
+      });
+    }
+
+    let finalBranchId: number | null = null;
 
     if (isBranchManager(currentRole)) {
       if (!currentBranchId) {
         return res.status(403).json({
-          message: "Tài khoản quản lý chi nhánh chưa được gán chi nhánh",
+          message: "Tài khoản quản lý chưa được gắn chi nhánh",
         });
       }
 
-      // Không cho branch_manager tự chọn chi nhánh khác
       if (
         branch_id !== undefined &&
         branch_id !== null &&
         Number(branch_id) !== currentBranchId
       ) {
         return res.status(403).json({
-          message: "Bạn không có quyền tạo nhân viên cho chi nhánh khác",
+          message: "Bạn không được tạo nhân viên cho chi nhánh khác",
         });
       }
-    }
 
-    /* =================================================
-       KIỂM TRA EMAIL
-    ================================================= */
+      finalBranchId = currentBranchId;
+    } else if (branch_id !== undefined && branch_id !== null) {
+      const parsedBranchId = Number(branch_id);
 
-    const exist = await User.findOne({
-      where: { email },
-    });
-
-    if (exist) {
-      return res.status(409).json({
-        message: "Email đã tồn tại",
-      });
-    }
-
-    /* =================================================
-       KIỂM TRA ROLE
-    ================================================= */
-
-    const role = await Role.findByPk(Number(role_id));
-
-    if (!role) {
-      return res.status(400).json({
-        message: "Role không tồn tại",
-      });
-    }
-
-    /* =================================================
-       KHÔNG CHO BRANCH MANAGER TẠO QUẢN LÝ
-    ================================================= */
-
-    if (
-      isBranchManager(currentRole) &&
-      ["admin", "chain_manager", "branch_manager"].includes(role.name)
-    ) {
-      return res.status(403).json({
-        message: "Bạn không có quyền tạo tài khoản quản lý",
-      });
-    }
-
-    /* =================================================
-       XÁC ĐỊNH BRANCH
-    ================================================= */
-
-    let finalBranchId: number | null = null;
-
-    if (isGlobalRole(currentRole)) {
-      // Admin / chain_manager có thể chọn branch
-      if (branch_id !== undefined && branch_id !== null) {
-        const branch = await Branch.findByPk(Number(branch_id));
-
-        if (!branch) {
-          return res.status(400).json({
-            message: "Chi nhánh không tồn tại",
-          });
-        }
-
-        finalBranchId = Number(branch_id);
+      if (!Number.isInteger(parsedBranchId) || parsedBranchId <= 0) {
+        return res.status(400).json({
+          message: "Chi nhánh không hợp lệ",
+        });
       }
-    } else if (isBranchManager(currentRole)) {
-      // Branch manager bắt buộc thuộc chi nhánh của mình
-      finalBranchId = currentBranchId ?? null;
+
+      const branch = await Branch.findByPk(parsedBranchId);
+
+      if (!branch) {
+        return res.status(400).json({
+          message: "Chi nhánh không tồn tại",
+        });
+      }
+
+      finalBranchId = parsedBranchId;
     }
 
-    /* =================================================
-       HASH PASSWORD
-    ================================================= */
+    if (isBranchAssignedRole(role.name) && !finalBranchId) {
+      return res.status(400).json({
+        message: "Tài khoản quản lý chi nhánh và nhân viên phải được gắn chi nhánh",
+      });
+    }
 
-    const hashed = await bcrypt.hash(password, 10);
-
-    /* =================================================
-       TẠO USER
-    ================================================= */
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await User.create({
-      name,
-      email,
-      password: hashed,
-      role_id: Number(role_id),
+      name: name.trim(),
+      email: normalizedEmail,
+      password: hashedPassword,
+      role_id: parsedRoleId,
       branch_id: finalBranchId,
-      status: status || "active",
+      status: status ?? "active",
     });
 
-    /* =================================================
-       LẤY USER SAU KHI TẠO
-    ================================================= */
-
     const createdUser = await User.findByPk(user.id, {
-      attributes: {
-        exclude: ["password"],
-      },
-
-      include: [
-        {
-          model: Role,
-          as: "role",
-          attributes: ["id", "name"],
-        },
-        {
-          model: Branch,
-          as: "branch",
-          attributes: ["id", "name", "code"],
-        },
-      ],
+      attributes: { exclude: ["password"] },
+      include: includeUserRelations,
     });
 
     return res.status(201).json({
-      message: "Tạo nhân viên thành công",
+      message: "Tạo tài khoản thành công",
       user: createdUser,
     });
   } catch (err) {
     console.error("CREATE USER ERROR:", err);
 
     return res.status(500).json({
-      message: "Không thể tạo nhân viên",
+      message: "Không thể tạo tài khoản",
     });
   }
 };
@@ -188,49 +259,35 @@ export const createUser = async (req: AuthRequest, res: Response) => {
    GET ALL USERS
 ===================================================== */
 
-export const getUsers = async (req: AuthRequest, res: Response) => {
+export const getUsers = async (
+  req: AuthRequest,
+  res: Response
+) => {
   try {
     const currentRole = req.user?.role;
     const currentBranchId = req.user?.branchId;
 
-    let whereCondition = {};
+    if (!isAdmin(currentRole) && !isChainManager(currentRole) &&
+        !isBranchManager(currentRole)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền xem danh sách tài khoản",
+      });
+    }
 
-    /* =================================================
-       BRANCH MANAGER CHỈ XEM USER CÙNG CHI NHÁNH
-    ================================================= */
+    const whereCondition = isBranchManager(currentRole)
+      ? { branch_id: currentBranchId ?? -1 }
+      : {};
 
-    if (isBranchManager(currentRole)) {
-      if (!currentBranchId) {
-        return res.status(403).json({
-          message: "Tài khoản chưa được gán chi nhánh",
-        });
-      }
-
-      whereCondition = {
-        branch_id: currentBranchId,
-      };
+    if (isBranchManager(currentRole) && !currentBranchId) {
+      return res.status(403).json({
+        message: "Tài khoản quản lý chưa được gắn chi nhánh",
+      });
     }
 
     const users = await User.findAll({
       where: whereCondition,
-
-      attributes: {
-        exclude: ["password"],
-      },
-
-      include: [
-        {
-          model: Role,
-          as: "role",
-          attributes: ["id", "name"],
-        },
-        {
-          model: Branch,
-          as: "branch",
-          attributes: ["id", "name", "code"],
-        },
-      ],
-
+      attributes: { exclude: ["password"] },
+      include: includeUserRelations,
       order: [["id", "DESC"]],
     });
 
@@ -239,7 +296,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     console.error("GET USERS ERROR:", err);
 
     return res.status(500).json({
-      message: "Không thể lấy danh sách nhân viên",
+      message: "Không thể lấy danh sách tài khoản",
     });
   }
 };
@@ -255,9 +312,9 @@ export const getUserById = async (
   try {
     const id = Number(req.params.id);
 
-    if (isNaN(id)) {
+    if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({
-        message: "ID không hợp lệ",
+        message: "ID tài khoản không hợp lệ",
       });
     }
 
@@ -265,44 +322,34 @@ export const getUserById = async (
     const currentBranchId = req.user?.branchId;
 
     const user = await User.findByPk(id, {
-      attributes: {
-        exclude: ["password"],
-      },
-
-      include: [
-        {
-          model: Role,
-          as: "role",
-          attributes: ["id", "name"],
-        },
-        {
-          model: Branch,
-          as: "branch",
-          attributes: ["id", "name", "code"],
-        },
-      ],
+      attributes: { exclude: ["password"] },
+      include: includeUserRelations,
     });
 
     if (!user) {
       return res.status(404).json({
-        message: "Nhân viên không tồn tại",
+        message: "Tài khoản không tồn tại",
       });
     }
 
-    /* =================================================
-       KIỂM TRA BRANCH ISOLATION
-    ================================================= */
+    const targetRole = user.role?.name;
+
+    if (!targetRole || !canManageTarget(currentRole, targetRole)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền xem tài khoản này",
+      });
+    }
 
     if (isBranchManager(currentRole)) {
       if (!currentBranchId) {
         return res.status(403).json({
-          message: "Tài khoản chưa được gán chi nhánh",
+          message: "Tài khoản quản lý chưa được gắn chi nhánh",
         });
       }
 
       if (user.branch_id !== currentBranchId) {
         return res.status(403).json({
-          message: "Bạn không có quyền xem nhân viên chi nhánh khác",
+          message: "Bạn không có quyền xem tài khoản chi nhánh khác",
         });
       }
     }
@@ -312,7 +359,7 @@ export const getUserById = async (
     console.error("GET USER BY ID ERROR:", err);
 
     return res.status(500).json({
-      message: "Không thể lấy thông tin nhân viên",
+      message: "Không thể lấy thông tin tài khoản",
     });
   }
 };
@@ -328,9 +375,9 @@ export const updateUser = async (
   try {
     const id = Number(req.params.id);
 
-    if (isNaN(id)) {
+    if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({
-        message: "ID không hợp lệ",
+        message: "ID tài khoản không hợp lệ",
       });
     }
 
@@ -345,111 +392,148 @@ export const updateUser = async (
 
     const currentRole = req.user?.role;
     const currentBranchId = req.user?.branchId;
+    const currentUserId = req.user?.id;
 
-    /* =================================================
-       TÌM USER
-    ================================================= */
-
-    const user = await User.findByPk(id);
+    const user = await User.findByPk(id, {
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["id", "name"],
+        },
+      ],
+    });
 
     if (!user) {
       return res.status(404).json({
-        message: "Nhân viên không tồn tại",
+        message: "Tài khoản không tồn tại",
       });
     }
 
-    /* =================================================
-       BRANCH ISOLATION
-    ================================================= */
+    const oldRole = user.role?.name;
+
+    if (!oldRole || !canManageTarget(currentRole, oldRole)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền chỉnh sửa tài khoản này",
+      });
+    }
 
     if (isBranchManager(currentRole)) {
       if (!currentBranchId) {
         return res.status(403).json({
-          message: "Tài khoản chưa được gán chi nhánh",
+          message: "Tài khoản quản lý chưa được gắn chi nhánh",
         });
       }
 
       if (user.branch_id !== currentBranchId) {
         return res.status(403).json({
-          message: "Bạn không có quyền sửa nhân viên chi nhánh khác",
-        });
-      }
-
-      // Không cho sửa sang chi nhánh khác
-      if (
-        branch_id !== undefined &&
-        branch_id !== null &&
-        Number(branch_id) !== currentBranchId
-      ) {
-        return res.status(403).json({
-          message: "Bạn không có quyền chuyển nhân viên sang chi nhánh khác",
-        });
-      }
-
-      // Không cho branch manager bỏ branch
-      if (branch_id === null) {
-        return res.status(403).json({
-          message: "Nhân viên phải thuộc một chi nhánh",
+          message: "Bạn không có quyền chỉnh sửa nhân viên chi nhánh khác",
         });
       }
     }
 
-    /* =================================================
-       KIỂM TRA EMAIL
-    ================================================= */
-
-    if (email && email !== user.email) {
-      const exist = await User.findOne({
-        where: { email },
+    // Không cho người dùng tự thay đổi vai trò hoặc chi nhánh của mình.
+    if (
+      currentUserId === user.id &&
+      (role_id !== undefined || branch_id !== undefined)
+    ) {
+      return res.status(403).json({
+        message: "Bạn không thể tự thay đổi vai trò hoặc chi nhánh của mình",
       });
-
-      if (exist) {
-        return res.status(409).json({
-          message: "Email đã được sử dụng",
-        });
-      }
     }
 
-    /* =================================================
-       KIỂM TRA ROLE
-    ================================================= */
+    let newRoleName = oldRole;
 
     if (role_id !== undefined) {
-      const role = await Role.findByPk(Number(role_id));
+      const parsedRoleId = Number(role_id);
 
-      if (!role) {
+      if (!Number.isInteger(parsedRoleId) || parsedRoleId <= 0) {
         return res.status(400).json({
-          message: "Role không tồn tại",
+          message: "Role ID không hợp lệ",
         });
       }
 
-      if (
-        isBranchManager(currentRole) &&
-        ["admin", "chain_manager", "branch_manager"].includes(role.name)
-      ) {
+      const newRole = await Role.findByPk(parsedRoleId);
+
+      if (!newRole) {
+        return res.status(400).json({
+          message: "Vai trò không tồn tại",
+        });
+      }
+
+      if (!canAssignRole(currentRole, newRole.name)) {
         return res.status(403).json({
-          message: "Bạn không có quyền gán vai trò quản lý",
+          message: "Bạn không có quyền gán vai trò này",
         });
       }
 
-      user.role_id = Number(role_id);
+      newRoleName = newRole.name;
+      user.role_id = newRole.id;
     }
 
-    /* =================================================
-       KIỂM TRA BRANCH
-    ================================================= */
+    // Không cho đổi email thành email đã được sử dụng.
+    if (email !== undefined) {
+      if (typeof email !== "string" || !email.trim()) {
+        return res.status(400).json({
+          message: "Email không hợp lệ",
+        });
+      }
 
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (normalizedEmail !== user.email.toLowerCase()) {
+        const existingUser = await User.findOne({
+          where: {
+            email: normalizedEmail,
+            id: { [Op.ne]: user.id },
+          },
+        });
+
+        if (existingUser) {
+          return res.status(409).json({
+            message: "Email đã được sử dụng",
+          });
+        }
+      }
+
+      user.email = normalizedEmail;
+    }
+
+    // Kiểm tra chi nhánh mới.
     if (branch_id !== undefined) {
       if (branch_id === null) {
-        if (isBranchManager(currentRole)) {
+        if (isBranchAssignedRole(newRoleName)) {
+          return res.status(400).json({
+            message: "Quản lý chi nhánh và nhân viên phải được gắn chi nhánh",
+          });
+        }
+
+        if (!isAdmin(currentRole)) {
           return res.status(403).json({
-            message: "Không thể bỏ chi nhánh của nhân viên",
+            message: "Bạn không có quyền gỡ tài khoản khỏi chi nhánh",
           });
         }
 
         user.branch_id = null;
       } else {
-        const branch = await Branch.findByPk(Number(branch_id));
+        const parsedBranchId = Number(branch_id);
+
+        if (!Number.isInteger(parsedBranchId) || parsedBranchId <= 0) {
+          return res.status(400).json({
+            message: "Chi nhánh không hợp lệ",
+          });
+        }
+
+        if (
+          isBranchManager(currentRole) &&
+          parsedBranchId !== currentBranchId
+        ) {
+          return res.status(403).json({
+            message: "Bạn không được chuyển nhân viên sang chi nhánh khác",
+          });
+        }
+
+        const branch = await Branch.findByPk(parsedBranchId);
 
         if (!branch) {
           return res.status(400).json({
@@ -457,77 +541,62 @@ export const updateUser = async (
           });
         }
 
-        if (
-          isBranchManager(currentRole) &&
-          Number(branch_id) !== currentBranchId
-        ) {
-          return res.status(403).json({
-            message: "Bạn không có quyền chuyển nhân viên sang chi nhánh khác",
-          });
-        }
-
-        user.branch_id = Number(branch_id);
+        user.branch_id = parsedBranchId;
       }
     }
 
-    /* =================================================
-       UPDATE INFO
-    ================================================= */
-
-    if (name !== undefined) {
-      user.name = name;
+    if (isBranchAssignedRole(newRoleName) && !user.branch_id) {
+      return res.status(400).json({
+        message: "Tài khoản quản lý chi nhánh và nhân viên phải được gắn chi nhánh",
+      });
     }
 
-    if (email !== undefined) {
-      user.email = email;
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({
+          message: "Họ tên không hợp lệ",
+        });
+      }
+
+      user.name = name.trim();
     }
 
     if (status !== undefined) {
+      if (!isValidStatus(status)) {
+        return res.status(400).json({
+          message: "Trạng thái chỉ được là active hoặc inactive",
+        });
+      }
+
       user.status = status;
     }
 
-    /* =================================================
-       UPDATE PASSWORD
-    ================================================= */
+    if (password !== undefined && password !== "") {
+      if (typeof password !== "string" || password.length < 6) {
+        return res.status(400).json({
+          message: "Mật khẩu phải có ít nhất 6 ký tự",
+        });
+      }
 
-    if (password) {
       user.password = await bcrypt.hash(password, 10);
     }
 
     await user.save();
 
-    /* =================================================
-       LẤY USER SAU UPDATE
-    ================================================= */
-
     const updatedUser = await User.findByPk(user.id, {
-      attributes: {
-        exclude: ["password"],
-      },
-
-      include: [
-        {
-          model: Role,
-          as: "role",
-          attributes: ["id", "name"],
-        },
-        {
-          model: Branch,
-          as: "branch",
-          attributes: ["id", "name", "code"],
-        },
-      ],
+      attributes: { exclude: ["password"] },
+      include: includeUserRelations,
     });
 
     return res.status(200).json({
-      message: "Cập nhật nhân viên thành công",
+      message: "Cập nhật tài khoản thành công",
       user: updatedUser,
     });
   } catch (err) {
     console.error("UPDATE USER ERROR:", err);
 
     return res.status(500).json({
-      message: "Không thể cập nhật nhân viên",
+      message: "Không thể cập nhật tài khoản",
     });
   }
 };
@@ -543,31 +612,50 @@ export const deleteUser = async (
   try {
     const id = Number(req.params.id);
 
-    if (isNaN(id)) {
+    if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({
-        message: "ID không hợp lệ",
+        message: "ID tài khoản không hợp lệ",
       });
     }
 
     const currentRole = req.user?.role;
     const currentBranchId = req.user?.branchId;
+    const currentUserId = req.user?.id;
 
-    const user = await User.findByPk(id);
+    const user = await User.findByPk(id, {
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["id", "name"],
+        },
+      ],
+    });
 
     if (!user) {
       return res.status(404).json({
-        message: "Nhân viên không tồn tại",
+        message: "Tài khoản không tồn tại",
       });
     }
 
-    /* =================================================
-       BRANCH ISOLATION
-    ================================================= */
+    if (currentUserId === user.id) {
+      return res.status(403).json({
+        message: "Bạn không thể tự xóa tài khoản của mình",
+      });
+    }
+
+    const targetRole = user.role?.name;
+
+    if (!targetRole || !canManageTarget(currentRole, targetRole)) {
+      return res.status(403).json({
+        message: "Bạn không có quyền xóa tài khoản này",
+      });
+    }
 
     if (isBranchManager(currentRole)) {
       if (!currentBranchId) {
         return res.status(403).json({
-          message: "Tài khoản chưa được gán chi nhánh",
+          message: "Tài khoản quản lý chưa được gắn chi nhánh",
         });
       }
 
@@ -578,26 +666,16 @@ export const deleteUser = async (
       }
     }
 
-    /* =================================================
-       KHÔNG CHO TỰ XÓA
-    ================================================= */
-
-    if (req.user?.id === user.id) {
-      return res.status(403).json({
-        message: "Bạn không thể tự xóa tài khoản của mình",
-      });
-    }
-
     await user.destroy();
 
     return res.status(200).json({
-      message: "Xóa nhân viên thành công",
+      message: "Xóa tài khoản thành công",
     });
   } catch (err) {
     console.error("DELETE USER ERROR:", err);
 
     return res.status(500).json({
-      message: "Không thể xóa nhân viên",
+      message: "Không thể xóa tài khoản",
     });
   }
 };

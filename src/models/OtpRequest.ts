@@ -1,6 +1,8 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
+import { randomInt } from "crypto";
 
+const otp = randomInt(100000, 1000000).toString();
 export interface OtpRequestAttributes {
   id?: number;
   phone: string;

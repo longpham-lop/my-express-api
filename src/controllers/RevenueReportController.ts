@@ -1,12 +1,10 @@
-
 import { Response } from "express";
-import { Op } from "sequelize";
+import { Op, WhereOptions } from "sequelize";
 
 import Payment from "../models/Payment";
 import Order from "../models/Order";
+import StaffBranch from "../models/StaffBranch";
 import { AuthRequest } from "../middlewares/auth.middleware";
-
-const GLOBAL_ROLES = ["admin", "chain_manager"];
 
 const REPORT_ROLES = [
   "admin",
@@ -14,100 +12,246 @@ const REPORT_ROLES = [
   "branch_manager",
 ];
 
+const VIETNAM_TIME_ZONE = "Asia/Ho_Chi_Minh";
+const VIETNAM_OFFSET_HOURS = 7;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Lấy ngày hiện tại theo múi giờ Việt Nam.
+ * Kết quả: YYYY-MM-DD.
+ */
+const getVietnamDate = (date: Date): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: VIETNAM_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Chuyển ngày YYYY-MM-DD theo giờ Việt Nam
+ * thành mốc UTC để truy vấn database.
+ */
+const getVietnamDateBoundary = (
+  dateString: string
+): Date | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const date = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  // Kiểm tra ngày thực tế có hợp lệ không.
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  // 00:00 giờ Việt Nam = 17:00 UTC ngày hôm trước.
+  return new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day,
+      -VIETNAM_OFFSET_HOURS
+    )
+  );
+};
+
 export const getRevenueReport = async (
   req: AuthRequest,
   res: Response
 ) => {
   try {
-    // 1. Kiểm tra đăng nhập
+    // =====================================================
+    // 1. AUTHENTICATION & PERMISSION
+    // =====================================================
+
     if (!req.user) {
       return res.status(401).json({
         message: "Bạn chưa đăng nhập",
       });
     }
 
-    // 2. Kiểm tra quyền xem báo cáo
-    if (!REPORT_ROLES.includes(req.user.role)) {
+    const { role, id, branchId } = req.user;
+
+    if (!REPORT_ROLES.includes(role)) {
       return res.status(403).json({
         message: "Bạn không có quyền xem báo cáo doanh thu",
       });
     }
 
-    // 3. Lấy khoảng thời gian từ query
-    const { start_date, end_date, branch_id } = req.query;
+    // =====================================================
+    // 2. DATE FILTER
+    // =====================================================
 
-    const now = new Date();
+    const today = getVietnamDate(new Date());
+    const currentMonth = `${today.slice(0, 7)}-01`;
 
-    // Mặc định: từ đầu tháng hiện tại đến hiện tại
-    const defaultStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      1
+    const startDateString =
+      req.query.start_date !== undefined
+        ? String(req.query.start_date)
+        : currentMonth;
+
+    const endDateString =
+      req.query.end_date !== undefined
+        ? String(req.query.end_date)
+        : today;
+
+    const startDate =
+      getVietnamDateBoundary(startDateString);
+
+    const endDate =
+      getVietnamDateBoundary(endDateString);
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        message:
+          "Ngày bắt đầu hoặc ngày kết thúc không hợp lệ. Định dạng yêu cầu: YYYY-MM-DD",
+      });
+    }
+
+    if (startDate.getTime() > endDate.getTime()) {
+      return res.status(400).json({
+        message:
+          "Ngày bắt đầu không được sau ngày kết thúc",
+      });
+    }
+
+    // Bao gồm toàn bộ ngày kết thúc.
+    const endExclusive = new Date(
+      endDate.getTime() + ONE_DAY_MS
     );
 
-    const startDate = start_date
-      ? new Date(`${String(start_date)}T00:00:00`)
-      : defaultStart;
+    // =====================================================
+    // 3. DETERMINE ALLOWED BRANCHES
+    // =====================================================
 
-    const endDate = end_date
-      ? new Date(`${String(end_date)}T00:00:00`)
-      : now;
+    let allowedBranchIds: number[] | null = null;
 
-    if (
-      Number.isNaN(startDate.getTime()) ||
-      Number.isNaN(endDate.getTime())
-    ) {
-      return res.status(400).json({
-        message: "Ngày bắt đầu hoặc ngày kết thúc không hợp lệ",
-      });
-    }
-
-    if (startDate > endDate) {
-      return res.status(400).json({
-        message: "Ngày bắt đầu không được sau ngày kết thúc",
-      });
-    }
-
-    // Nếu người dùng truyền end_date, lấy trọn ngày đó.
-    // Dùng mốc đầu ngày kế tiếp để không bỏ sót giao dịch cuối ngày.
-    const endExclusive = end_date
-      ? new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
-      : new Date(endDate.getTime() + 1);
-
-    // 4. Xây dựng điều kiện lọc đơn hàng theo chi nhánh
-    const orderWhere: {
-      branch_id?: number;
-      is_deleted?: boolean;
-    } = {
-      is_deleted: false,
-    };
-
-    if (GLOBAL_ROLES.includes(req.user.role)) {
-      // Admin và quản lý chuỗi được xem tất cả chi nhánh
-      if (branch_id !== undefined) {
-        const branchId = Number(branch_id);
-
-        if (!Number.isInteger(branchId) || branchId <= 0) {
-          return res.status(400).json({
-            message: "branch_id không hợp lệ",
-          });
-        }
-
-        orderWhere.branch_id = branchId;
-      }
-    } else {
-      // Quản lý chi nhánh chỉ xem dữ liệu chi nhánh của mình
-      if (!req.user.branchId) {
+    // Branch Manager: chỉ được xem chi nhánh của mình.
+    if (role === "branch_manager") {
+      if (branchId == null) {
         return res.status(403).json({
           message: "Tài khoản chưa được gán chi nhánh",
         });
       }
 
-      orderWhere.branch_id = req.user.branchId;
+      allowedBranchIds = [Number(branchId)];
     }
 
-    // 5. Lấy các giao dịch thành công trong khoảng thời gian
+    // Chain Manager: chỉ xem các chi nhánh được phân công.
+    if (role === "chain_manager") {
+      const assignedBranches = await StaffBranch.findAll({
+        attributes: ["branch_id"],
+        where: {
+          user_id: id,
+        },
+        raw: true,
+      });
+
+      allowedBranchIds = [
+        ...new Set(
+          assignedBranches.map((item) =>
+            Number(item.branch_id)
+          )
+        ),
+      ];
+
+      if (allowedBranchIds.length === 0) {
+        return res.status(403).json({
+          message:
+            "Tài khoản chưa được phân công chi nhánh quản lý",
+        });
+      }
+    }
+
+    // =====================================================
+    // 4. VALIDATE SELECTED BRANCH
+    // =====================================================
+
+    let selectedBranchId: number | undefined;
+
+    if (req.query.branch_id !== undefined) {
+      const parsedBranchId = Number(req.query.branch_id);
+
+      if (
+        !Number.isSafeInteger(parsedBranchId) ||
+        parsedBranchId <= 0
+      ) {
+        return res.status(400).json({
+          message: "branch_id không hợp lệ",
+        });
+      }
+
+      selectedBranchId = parsedBranchId;
+
+      if (
+        allowedBranchIds !== null &&
+        !allowedBranchIds.includes(selectedBranchId)
+      ) {
+        return res.status(403).json({
+          message:
+            "Bạn không có quyền xem báo cáo của chi nhánh này",
+        });
+      }
+    }
+
+    // =====================================================
+    // 5. BUILD ORDER FILTER
+    // =====================================================
+
+    const branchCondition: WhereOptions =
+      selectedBranchId !== undefined
+        ? {
+            branch_id: selectedBranchId,
+          }
+        : allowedBranchIds !== null
+          ? {
+              branch_id: {
+                [Op.in]: allowedBranchIds,
+              },
+            }
+          : {};
+
+    const orderWhere: WhereOptions = {
+      is_deleted: false,
+      status: {
+        [Op.ne]: "cancelled",
+      },
+      ...branchCondition,
+    };
+
+    // =====================================================
+    // 6. GET SUCCESSFUL PAYMENTS
+    // =====================================================
+
     const payments = await Payment.findAll({
+      attributes: [
+        "id",
+        "amount",
+        "method",
+        "createdAt",
+      ],
+
       where: {
         status: "success",
         createdAt: {
@@ -115,45 +259,53 @@ export const getRevenueReport = async (
           [Op.lt]: endExclusive,
         },
       },
+
       include: [
         {
           model: Order,
-          attributes: [
-            "id",
-            "branch_id",
-            "total_price",
-            "status",
-          ],
+          attributes: [],
           where: orderWhere,
           required: true,
         },
       ],
+
       order: [["createdAt", "ASC"]],
     });
 
-    // 6. Tổng hợp số liệu
+    // =====================================================
+    // 7. AGGREGATE REVENUE
+    // =====================================================
+
     let totalRevenue = 0;
 
     const dailyRevenue: Record<
       string,
-      { revenue: number; transactions: number }
+      {
+        revenue: number;
+        transactions: number;
+      }
     > = {};
 
     const methodRevenue: Record<
       string,
-      { revenue: number; transactions: number }
+      {
+        revenue: number;
+        transactions: number;
+      }
     > = {};
 
     for (const payment of payments) {
-      const amount = Number(payment.amount) || 0;
-      const paymentDate = new Date(payment.createdAt);
-      const dateKey = [
-        paymentDate.getFullYear(),
-        String(paymentDate.getMonth() + 1).padStart(2, "0"),
-        String(paymentDate.getDate()).padStart(2, "0"),
-      ].join("-");
+      const amount = Number(payment.amount);
 
-      const method = payment.method;
+      if (!Number.isFinite(amount) || amount < 0) {
+        continue;
+      }
+
+      const dateKey = getVietnamDate(
+        new Date(payment.createdAt)
+      );
+
+      const method = String(payment.method);
 
       totalRevenue += amount;
 
@@ -178,22 +330,31 @@ export const getRevenueReport = async (
       methodRevenue[method].transactions += 1;
     }
 
-    const transactionCount = payments.length;
+    const transactionCount = Object.values(
+      dailyRevenue
+    ).reduce(
+      (total, item) => total + item.transactions,
+      0
+    );
 
-    const averageTransaction = transactionCount > 0
-      ? totalRevenue / transactionCount
-      : 0;
+    const averageTransaction =
+      transactionCount > 0
+        ? totalRevenue / transactionCount
+        : 0;
 
-    // 7. Trả dữ liệu về frontend
-    return res.json({
+    // =====================================================
+    // 8. RESPONSE
+    // =====================================================
+
+    return res.status(200).json({
       message: "Lấy báo cáo doanh thu thành công",
+
       filters: {
-        start_date: startDate.toISOString().slice(0, 10),
-        end_date: end_date
-          ? String(end_date)
-          : now.toISOString().slice(0, 10),
-        branch_id: orderWhere.branch_id ?? null,
+        start_date: startDateString,
+        end_date: endDateString,
+        branch_id: selectedBranchId ?? null,
       },
+
       summary: {
         total_revenue: Number(totalRevenue.toFixed(2)),
         transaction_count: transactionCount,
@@ -201,13 +362,17 @@ export const getRevenueReport = async (
           averageTransaction.toFixed(2)
         ),
       },
-      daily_revenue: Object.entries(dailyRevenue).map(
-        ([date, data]) => ({
+
+      daily_revenue: Object.entries(dailyRevenue)
+        .sort(([dateA], [dateB]) =>
+          dateA.localeCompare(dateB)
+        )
+        .map(([date, data]) => ({
           date,
           revenue: Number(data.revenue.toFixed(2)),
           transactions: data.transactions,
-        })
-      ),
+        })),
+
       payment_methods: Object.entries(methodRevenue).map(
         ([method, data]) => ({
           method,

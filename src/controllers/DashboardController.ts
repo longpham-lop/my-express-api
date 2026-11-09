@@ -41,7 +41,11 @@ interface MenuItemRow {
 
 const toNumber = (
   value: number | string | null | undefined
-): number => Number(value ?? 0);
+): number => {
+  const result = Number(value ?? 0);
+
+  return Number.isFinite(result) ? result : 0;
+};
 
 export const getDashboard = async (
   req: Request,
@@ -114,6 +118,8 @@ export const getDashboard = async (
 
     const menuWhere: WhereOptions = {
       ...branchFilter,
+      isActive: true,
+      is_deleted: false,
     };
 
     const orderWhere: WhereOptions = {

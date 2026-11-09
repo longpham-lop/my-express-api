@@ -2,6 +2,7 @@ import { Response } from "express";
 import { Op } from "sequelize";
 import type { Transaction } from "sequelize";
 
+import StaffBranch from "../models/StaffBranch";
 import OrderItem from "../models/OrderItem";
 import Order from "../models/Order";
 import MenuItem from "../models/Menu";
@@ -19,7 +20,7 @@ import { getIO } from "../socket";
  * CONSTANTS
  * ===================================================== */
 
-const GLOBAL_ROLES = ["admin", "chain_manager"];
+const GLOBAL_ROLES = ["admin"];
 
 const MANAGER_ROLES = [
   "admin",
@@ -82,51 +83,79 @@ const isManagerRole = (role: string): boolean =>
  * PERMISSION HELPERS
  * ===================================================== */
 
-const canAccessOrderBranch = (
+/* =====================================================
+ * PERMISSION HELPERS
+ * ===================================================== */
+
+const canAccessOrderBranch = async (
   role: string,
+  userId: number,
   userBranchId: number | null | undefined,
   orderBranchId: number | null | undefined
-): boolean => {
-  if (isGlobalRole(role)) {
-    return true;
-  }
-
-  if (!STAFF_ROLES.includes(role)) {
+): Promise<boolean> => {
+  if (orderBranchId == null) {
     return false;
   }
 
+  const targetBranchId = Number(orderBranchId);
+
   if (
-    userBranchId == null ||
-    orderBranchId == null
+    !Number.isInteger(targetBranchId) ||
+    targetBranchId <= 0
   ) {
     return false;
   }
 
+  // Admin được truy cập toàn hệ thống.
+  if (role === "admin") {
+    return true;
+  }
+
+  // Chain Manager chỉ được truy cập chi nhánh được phân công.
+  if (role === "chain_manager") {
+    const assignment = await StaffBranch.findOne({
+      where: {
+        user_id: userId,
+        branch_id: targetBranchId,
+        is_active: true,
+      },
+    });
+
+    return Boolean(assignment);
+  }
+
+  // Nhân viên thông thường chỉ được truy cập chi nhánh của mình.
+  if (!STAFF_ROLES.includes(role)) {
+    return false;
+  }
+
+  if (userBranchId == null) {
+    return false;
+  }
+
   const currentBranchId = Number(userBranchId);
-  const targetBranchId = Number(orderBranchId);
 
   return (
     Number.isInteger(currentBranchId) &&
     currentBranchId > 0 &&
-    Number.isInteger(targetBranchId) &&
-    targetBranchId > 0 &&
     currentBranchId === targetBranchId
   );
 };
 
-const canAccessOrderItem = (
+const canAccessOrderItem = async (
   role: string,
   userId: number,
   userBranchId: number | null | undefined,
   order: Order
-): boolean => {
-  if (isGlobalRole(role)) {
+): Promise<boolean> => {
+  if (role === "admin") {
     return true;
   }
 
-  if (STAFF_ROLES.includes(role)) {
+  if (role === "chain_manager" || STAFF_ROLES.includes(role)) {
     return canAccessOrderBranch(
       role,
+      userId,
       userBranchId,
       order.branch_id
     );
@@ -457,23 +486,12 @@ export const createOrderItem = async (
 
     const role = req.user.role;
 
-    const canAddItem =
-      isGlobalRole(role) ||
-      (
-        (role === "branch_manager" ||
-          role === "waiter") &&
-        canAccessOrderBranch(
-          role,
-          req.user.branchId,
-          order.branch_id
-        )
-      ) ||
-      (
-        (role === "user" ||
-          role === "customer") &&
-        Number(order.user_id) ===
-          Number(req.user.id)
-      );
+    const canAddItem = await canAccessOrderItem(
+      role,
+      req.user.id,
+      req.user.branchId,
+      order
+    );
 
     if (!canAddItem) {
       await transaction.rollback();
@@ -671,12 +689,12 @@ export const updateOrderItem = async (
     const role = req.user.role;
 
     if (
-      !canAccessOrderItem(
+      !(await canAccessOrderItem(
         role,
         req.user.id,
         req.user.branchId,
         order
-      )
+      ))
     ) {
       await transaction.rollback();
 
@@ -853,11 +871,12 @@ export const deleteOrderItem = async (
     }
 
     if (
-      !canAccessOrderBranch(
+      !(await canAccessOrderBranch(
         req.user.role,
+        req.user.id,
         req.user.branchId,
         order.branch_id
-      )
+      ))
     ) {
       await transaction.rollback();
 
@@ -1040,11 +1059,12 @@ export const updateOrderItemStatus = async (
     const role = req.user.role;
 
     if (
-      !canAccessOrderBranch(
+      !(await canAccessOrderBranch(
         role,
+        req.user.id,
         req.user.branchId,
         order.branch_id
-      )
+      ))
     ) {
       await transaction.rollback();
 

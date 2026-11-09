@@ -10,6 +10,7 @@ import {
 } from "../models";
 
 import type { AuthRequest } from "../middlewares/auth.middleware";
+import { Op } from "sequelize";
 
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
@@ -140,6 +141,7 @@ export const listPublicBranches = async (
  * Branch Manager:
  *      Chỉ xem branch của mình.
  */
+
 export const listBranches = async (
   req: AuthRequest,
   res: Response
@@ -151,45 +153,95 @@ export const listBranches = async (
       });
     }
 
-    const whereCondition: {
-      id?: number;
-    } = {};
+    const { id: userId, role, branchId } = req.user;
 
-    /**
-     * Branch Manager / Waiter:
-     * chỉ được xem chi nhánh của mình
-     */
-    if (
-      req.user.role === "branch_manager" ||
-      req.user.role === "waiter"
-    ) {
-      if (!req.user.branchId) {
+    // Admin: được xem tất cả chi nhánh.
+    if (role === "admin") {
+      const branches = await Branch.findAll({
+        include: [
+          {
+            model: BranchSetting,
+            as: "settings",
+          },
+        ],
+        order: [["id", "ASC"]],
+      });
+
+      return res.status(200).json({
+        data: branches,
+      });
+    }
+
+    // Chain Manager: chỉ xem chi nhánh được phân công.
+    if (role === "chain_manager") {
+      const assignments = await StaffBranch.findAll({
+        where: {
+          user_id: userId,
+          is_active: true,
+        },
+        attributes: ["branch_id"],
+      });
+
+      const branchIds = [
+        ...new Set(
+          assignments.map((item) => Number(item.branch_id))
+        ),
+      ];
+
+      if (branchIds.length === 0) {
+        return res.status(200).json({
+          data: [],
+        });
+      }
+
+      const branches = await Branch.findAll({
+        where: {
+          id: {
+            [Op.in]: branchIds,
+          },
+        },
+        include: [
+          {
+            model: BranchSetting,
+            as: "settings",
+          },
+        ],
+        order: [["id", "ASC"]],
+      });
+
+      return res.status(200).json({
+        data: branches,
+      });
+    }
+
+    // Branch Manager / Waiter: chỉ xem chi nhánh của mình.
+    if (role === "branch_manager" || role === "waiter") {
+      if (!branchId) {
         return res.status(403).json({
           message: "Tài khoản chưa được gán chi nhánh",
         });
       }
 
-      whereCondition.id = req.user.branchId;
+      const branches = await Branch.findAll({
+        where: {
+          id: branchId,
+        },
+        include: [
+          {
+            model: BranchSetting,
+            as: "settings",
+          },
+        ],
+        order: [["id", "ASC"]],
+      });
+
+      return res.status(200).json({
+        data: branches,
+      });
     }
 
-    /**
-     * Admin / Chain Manager:
-     * không set whereCondition
-     * => xem tất cả chi nhánh
-     */
-    const branches = await Branch.findAll({
-      where: whereCondition,
-      include: [
-        {
-          model: BranchSetting,
-          as: "settings",
-        },
-      ],
-      order: [["id", "ASC"]],
-    });
-
-    return res.status(200).json({
-      data: branches,
+    return res.status(403).json({
+      message: "Bạn không có quyền xem danh sách chi nhánh",
     });
   } catch (error) {
     console.error("LIST BRANCHES ERROR:", error);
@@ -199,6 +251,7 @@ export const listBranches = async (
     });
   }
 };
+
 
 /**
  * =========================================================

@@ -1,5 +1,7 @@
 import { Response } from "express";
+import { Op } from "sequelize";
 
+import StaffBranch from "../models/StaffBranch";
 import Order from "../models/Order";
 import Reservation from "../models/Reservation";
 import OrderItem from "../models/OrderItem";
@@ -17,7 +19,6 @@ import { getIO } from "../socket";
 
 const GLOBAL_ROLES = [
   "admin",
-  "chain_manager",
 ];
 
 const ORDER_ROLES = [
@@ -33,19 +34,6 @@ const MANAGER_ROLES = [
   "chain_manager",
   "branch_manager",
 ];
-
-/* =====================================================
- * ROLE HELPERS
- * ===================================================== */
-
-const isGlobalRole = (
-  role?: string
-): boolean => {
-  return (
-    !!role &&
-    GLOBAL_ROLES.includes(role)
-  );
-};
 
 const canManageOrders = (
   role?: string
@@ -84,13 +72,40 @@ const isValidPositiveId = (
  * BRANCH PERMISSION
  * ===================================================== */
 
-const canAccessBranch = (
+/**
+ * Kiểm tra quyền truy cập một chi nhánh.
+ *
+ * Admin: tất cả chi nhánh.
+ * Chain Manager: chi nhánh được phân công và đang hoạt động.
+ * Nhân viên chi nhánh: chi nhánh trong JWT.
+ */
+const canAccessBranch = async (
   role: string,
+  userId: number,
   userBranchId: number | null | undefined,
-  orderBranchId: number | null | undefined
-): boolean => {
-  if (isGlobalRole(role)) {
+  targetBranchId: number | null | undefined
+): Promise<boolean> => {
+  if (
+    targetBranchId == null ||
+    !isValidPositiveId(targetBranchId)
+  ) {
+    return false;
+  }
+
+  if (role === "admin") {
     return true;
+  }
+
+  if (role === "chain_manager") {
+    const assignment = await StaffBranch.findOne({
+      where: {
+        user_id: userId,
+        branch_id: Number(targetBranchId),
+        is_active: true,
+      },
+    });
+
+    return assignment !== null;
   }
 
   if (
@@ -101,25 +116,14 @@ const canAccessBranch = (
     return false;
   }
 
-  if (
-    userBranchId == null ||
-    orderBranchId == null
-  ) {
+  if (userBranchId == null) {
     return false;
   }
 
-  const currentBranchId =
-    Number(userBranchId);
-
-  const targetBranchId =
-    Number(orderBranchId);
-
   return (
-    Number.isInteger(currentBranchId) &&
-    currentBranchId > 0 &&
-    Number.isInteger(targetBranchId) &&
-    targetBranchId > 0 &&
-    currentBranchId === targetBranchId
+    Number.isInteger(Number(userBranchId)) &&
+    Number(userBranchId) > 0 &&
+    Number(userBranchId) === Number(targetBranchId)
   );
 };
 
@@ -165,18 +169,6 @@ const emitOrderUpdated = (
  * GET ALL ORDERS
  * ===================================================== */
 
-/**
- * GET /api/orders
- *
- * Admin / Chain Manager:
- * - Xem toàn bộ đơn hàng.
- *
- * Branch Manager / Waiter / Cashier:
- * - Chỉ xem đơn của chi nhánh mình.
- *
- * User / Customer:
- * - Chỉ xem đơn của chính mình.
- */
 export const getAllOrders = async (
   req: AuthRequest,
   res: Response
@@ -194,15 +186,51 @@ export const getAllOrders = async (
       branchId,
     } = req.user;
 
+    // Kiểm tra quyền truy cập danh sách đơn hàng.
     if (canManageOrders(role)) {
-      const whereCondition: Record<
-        string,
-        unknown
-      > = {
+      const whereCondition: {
+        is_deleted: boolean;
+        branch_id?: number | {
+          [Op.in]: number[];
+        };
+      } = {
         is_deleted: false,
       };
 
-      if (!isGlobalRole(role)) {
+      // ADMIN: Xem toàn bộ chi nhánh.
+      if (role === "admin") {
+        // Không cần thêm điều kiện branch_id.
+      }
+
+      // CHAIN MANAGER: Chỉ xem chi nhánh được phân công.
+      else if (role === "chain_manager") {
+        const assignments = await StaffBranch.findAll({
+          where: {
+            user_id: id,
+            is_active: true,
+          },
+          attributes: ["branch_id"],
+        });
+
+        const branchIds = [
+          ...new Set(
+            assignments.map(
+              (item) => item.branch_id
+            )
+          ),
+        ];
+
+        if (branchIds.length === 0) {
+          return res.status(200).json([]);
+        }
+
+        whereCondition.branch_id = {
+          [Op.in]: branchIds,
+        };
+      }
+
+      // BRANCH MANAGER / WAITER / CASHIER.
+      else {
         if (branchId == null) {
           return res.status(403).json({
             message:
@@ -210,8 +238,7 @@ export const getAllOrders = async (
           });
         }
 
-        whereCondition.branch_id =
-          Number(branchId);
+        whereCondition.branch_id = Number(branchId);
       }
 
       const orders = await Order.findAll({
@@ -255,9 +282,7 @@ export const getAllOrders = async (
       return res.status(200).json(orders);
     }
 
-    /*
-     * Customer chỉ xem đơn của chính mình.
-     */
+    // USER / CUSTOMER: Chỉ xem đơn của chính mình.
     if (
       role !== "user" &&
       role !== "customer"
@@ -392,26 +417,27 @@ export const getOrderById = async (
 
     const role = req.user.role;
 
-    if (isGlobalRole(role)) {
-      return res.status(200).json(order);
+   if (role === "admin") {
+    return res.status(200).json(order);
+  }
+
+  if (canManageOrders(role)) {
+    const allowed = await canAccessBranch(
+      role,
+      req.user.id,
+      req.user.branchId,
+      order.branch_id
+    );
+
+    if (!allowed) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xem Order của chi nhánh khác",
+      });
     }
 
-    if (canManageOrders(role)) {
-      const allowed = canAccessBranch(
-        role,
-        req.user.branchId,
-        order.branch_id
-      );
-
-      if (!allowed) {
-        return res.status(403).json({
-          message:
-            "Bạn không có quyền xem Order của chi nhánh khác",
-        });
-      }
-
-      return res.status(200).json(order);
-    }
+    return res.status(200).json(order);
+  }
 
     if (
       role !== "user" &&
@@ -460,18 +486,10 @@ export const getOrderDetail = getOrderById;
  * CREATE ORDER
  * ===================================================== */
 
-/**
- * POST /api/orders
- *
- * Nếu có reservation_id:
- * - Lấy branch_id từ Reservation.
- *
- * Nếu là nhân viên chi nhánh:
- * - Lấy branch_id từ JWT.
- *
- * total_price luôn bắt đầu bằng 0.
- * Backend sẽ tính lại khi thêm OrderItem.
- */
+/* =====================================================
+ * CREATE ORDER
+ * ===================================================== */
+
 export const createOrder = async (
   req: AuthRequest,
   res: Response
@@ -483,106 +501,143 @@ export const createOrder = async (
       });
     }
 
-    const reservationId =
-      req.body.reservation_id;
+    const {
+      id: userId,
+      role,
+      branchId: userBranchId,
+    } = req.user;
 
+    const reservationId = req.body.reservation_id;
+    const requestedBranchId = req.body.branch_id;
+
+    // Validate Reservation ID.
     if (
       reservationId != null &&
       !isValidPositiveId(reservationId)
     ) {
       return res.status(400).json({
-        message:
-          "Reservation ID không hợp lệ",
+        message: "Reservation ID không hợp lệ",
       });
     }
 
-    let finalBranchId:
-      number | null = null;
+    // Validate branch_id nếu client có gửi.
+    if (
+      requestedBranchId != null &&
+      !isValidPositiveId(requestedBranchId)
+    ) {
+      return res.status(400).json({
+        message: "Branch ID không hợp lệ",
+      });
+    }
 
-    let reservation:
-      | Reservation
-      | null = null;
+    let reservation: Reservation | null = null;
+    let finalBranchId: number | null = null;
 
+    // BƯỚC 1: Nếu có Reservation, lấy chi nhánh từ Reservation.
     if (reservationId != null) {
-      reservation =
-        await Reservation.findByPk(
-          Number(reservationId)
-        );
+      reservation = await Reservation.findByPk(
+        Number(reservationId)
+      );
 
       if (!reservation) {
         return res.status(404).json({
-          message:
-            "Reservation không tồn tại",
+          message: "Reservation không tồn tại",
         });
       }
 
-      finalBranchId =
-        reservation.branch_id ?? null;
+      if (reservation.branch_id == null) {
+        return res.status(400).json({
+          message: "Reservation chưa được gán chi nhánh",
+        });
+      }
+
+      finalBranchId = Number(reservation.branch_id);
     }
 
-    const role = req.user.role;
+    // BƯỚC 2: Nếu không có Reservation, xác định chi nhánh.
+    else {
+      if (role === "admin" || role === "chain_manager") {
+        // Admin và Chain Manager phải chọn chi nhánh.
+        if (requestedBranchId == null) {
+          return res.status(400).json({
+            message: "Vui lòng chọn chi nhánh để tạo đơn",
+          });
+        }
 
-    /*
-     * Nhân viên chi nhánh phải sử dụng
-     * Reservation thuộc đúng chi nhánh.
-     */
-    if (
-      reservation &&
-      canManageOrders(role) &&
-      !isGlobalRole(role)
-    ) {
-      if (
-        req.user.branchId == null ||
-        Number(reservation.branch_id) !==
-          Number(req.user.branchId)
+        finalBranchId = Number(requestedBranchId);
+      } else if (
+        role === "branch_manager" ||
+        role === "waiter" ||
+        role === "cashier"
       ) {
+        // Nhân viên chi nhánh chỉ sử dụng chi nhánh trong JWT.
+        if (userBranchId == null) {
+          return res.status(403).json({
+            message: "Tài khoản chưa được gán chi nhánh",
+          });
+        }
+
+        finalBranchId = Number(userBranchId);
+      } else if (
+        role === "user" ||
+        role === "customer"
+      ) {
+        // Khách hàng phải chọn chi nhánh.
+        if (requestedBranchId == null) {
+          return res.status(400).json({
+            message: "Vui lòng chọn chi nhánh",
+          });
+        }
+
+        finalBranchId = Number(requestedBranchId);
+      } else {
         return res.status(403).json({
-          message:
-            "Bạn không có quyền tạo Order cho Reservation thuộc chi nhánh khác",
+          message: "Bạn không có quyền tạo Order",
         });
       }
     }
 
-    /*
-     * Nếu chưa lấy được branch từ Reservation,
-     * sử dụng branch trong JWT.
-     */
-    if (
-      finalBranchId == null &&
-      req.user.branchId != null
-    ) {
-      finalBranchId =
-        Number(req.user.branchId);
-    }
+    // BƯỚC 3: Kiểm tra chi nhánh tồn tại.
+    const branch = await Branch.findByPk(finalBranchId);
 
-    /*
-     * Nhân viên chi nhánh bắt buộc có branch.
-     */
-    if (
-      canManageOrders(role) &&
-      !isGlobalRole(role) &&
-      finalBranchId == null
-    ) {
-      return res.status(403).json({
-        message:
-          "Tài khoản chưa được gán chi nhánh",
+    if (!branch) {
+      return res.status(404).json({
+        message: "Chi nhánh không tồn tại",
       });
     }
 
+    // BƯỚC 4: Kiểm tra quyền truy cập chi nhánh.
+    if (canManageOrders(role)) {
+      const allowed = await canAccessBranch(
+        role,
+        userId,
+        userBranchId,
+        finalBranchId
+      );
+
+      if (!allowed) {
+        return res.status(403).json({
+          message:
+            "Bạn không được phân công hoặc không có quyền thao tác tại chi nhánh này",
+        });
+      }
+    }
+
+    // BƯỚC 5: Tạo đơn hàng.
     const order = await Order.create({
       branch_id: finalBranchId,
-      user_id: req.user.id,
-      reservation_id:
-        reservation?.id ?? null,
+      user_id: userId,
+      reservation_id: reservation?.id ?? null,
       total_price: 0,
       status: "pending",
       is_deleted: false,
     });
 
+    // BƯỚC 6: Thông báo Socket.IO.
     emitOrderUpdated(
       order.id,
       order.status,
-      order.branch_id ?? null
+      order.branch_id
     );
 
     return res.status(201).json({
@@ -590,10 +645,7 @@ export const createOrder = async (
       data: order,
     });
   } catch (error: unknown) {
-    console.error(
-      "CREATE ORDER ERROR:",
-      error
-    );
+    console.error("CREATE ORDER ERROR:", error);
 
     return res.status(500).json({
       message:
@@ -603,7 +655,6 @@ export const createOrder = async (
     });
   }
 };
-
 /* =====================================================
  * UPDATE ORDER STATUS
  * ===================================================== */
@@ -668,13 +719,14 @@ export const updateOrderStatus = async (
       });
     }
 
-    if (
-      !canAccessBranch(
-        req.user.role,
-        req.user.branchId,
-        order.branch_id
-      )
-    ) {
+    const allowed = await canAccessBranch(
+      req.user.role,
+      req.user.id,
+      req.user.branchId,
+      order.branch_id
+    );
+
+    if (!allowed) {
       await transaction.rollback();
 
       return res.status(403).json({
@@ -867,13 +919,14 @@ export const deleteOrder = async (
       });
     }
 
-    if (
-      !canAccessBranch(
-        req.user.role,
-        req.user.branchId,
-        order.branch_id
-      )
-    ) {
+    const allowed = await canAccessBranch(
+      req.user.role,
+      req.user.id,
+      req.user.branchId,
+      order.branch_id
+    );
+
+    if (!allowed) {
       await transaction.rollback();
 
       return res.status(403).json({

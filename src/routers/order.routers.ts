@@ -20,7 +20,7 @@ router.get("/", getAllOrders);
 
 router.get("/my", getMyOrders);
 
-router.get("/orders/:id", getOrderDetail);
+router.get("/:id/detail", getOrderDetail);
 
 router.put("/items/:id/status", updateOrderItemStatus);
 

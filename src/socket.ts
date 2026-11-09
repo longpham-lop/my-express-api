@@ -1,7 +1,7 @@
-
 import { Server } from "socket.io";
 import type { Server as HttpServer } from "http";
 import jwt, { JwtPayload } from "jsonwebtoken";
+import StaffBranch from "./models/StaffBranch";
 
 interface AppJwtPayload extends JwtPayload {
   id: number;
@@ -23,7 +23,7 @@ declare module "socket.io" {
 
 let io: Server | null = null;
 
-const GLOBAL_ROLES = ["admin", "chain_manager"];
+const GLOBAL_ROLES = ["admin"];
 
 export const initSocket = (server: HttpServer): Server => {
   const secret = process.env.JWT_SECRET;
@@ -104,52 +104,93 @@ export const initSocket = (server: HttpServer): Server => {
   });
 
   io.on("connection", (socket) => {
-    const user = socket.data.user;
+  const user = socket.data.user;
 
-    // Room riêng cho từng người dùng
-    socket.join(`user:${user.id}`);
+  const joinUserRooms = async (): Promise<void> => {
+    // Room riêng cho người dùng.
+    await socket.join(`user:${user.id}`);
 
-    // Room riêng theo vai trò
-    socket.join(`role:${user.role}`);
+    // Room riêng theo vai trò.
+    await socket.join(`role:${user.role}`);
 
-    // Room riêng theo chi nhánh
-    
-// Room riêng theo chi nhánh
-    if (user.branchId !== null) {
-      socket.join(`branch:${user.branchId}`);
+    // ADMIN: nhận sự kiện toàn hệ thống.
+    if (GLOBAL_ROLES.includes(user.role)) {
+      await socket.join("role:global");
+    }
 
-      // Room riêng nhận thông báo đặt bàn
-      // Chỉ Branch Manager và Waiter được tham gia
-      if (
-        user.role === "branch_manager" ||
-        user.role === "waiter"
-      ) {
-        socket.join(
-          `branch:${user.branchId}:reservations`
+    // CHAIN MANAGER:
+    // Chỉ tham gia room của những chi nhánh
+    // được phân công và đang hoạt động.
+    else if (user.role === "chain_manager") {
+      const assignments = await StaffBranch.findAll({
+        where: {
+          user_id: user.id,
+          is_active: true,
+        },
+        attributes: ["branch_id"],
+      });
+
+      const branchIds = [
+        ...new Set(
+          assignments
+            .map((item) => Number(item.branch_id))
+            .filter(
+              (id) => Number.isSafeInteger(id) && id > 0
+            )
+        ),
+      ];
+
+      for (const branchId of branchIds) {
+        await socket.join(`branch:${branchId}`);
+
+        await socket.join(
+          `branch:${branchId}:reservations`
         );
       }
     }
 
-    // Room dành cho quản trị toàn hệ thống
-    if (GLOBAL_ROLES.includes(user.role)) {
-      socket.join("role:global");
+    // NHÂN VIÊN CHI NHÁNH:
+    // Lấy branchId từ JWT đã xác thực,
+    // không nhận branchId tùy ý từ Client.
+    else if (user.branchId !== null) {
+      await socket.join(`branch:${user.branchId}`);
+
+      if (
+        user.role === "branch_manager" ||
+        user.role === "waiter"
+      ) {
+        await socket.join(
+          `branch:${user.branchId}:reservations`
+        );
+      }
     }
+  };
 
-    console.log("SOCKET CONNECTED:", {
-      socketId: socket.id,
-      userId: user.id,
-      role: user.role,
-      branchId: user.branchId,
-    });
-
-    socket.on("disconnect", (reason) => {
-      console.log("SOCKET DISCONNECTED:", {
+  void joinUserRooms()
+    .then(() => {
+      console.log("SOCKET CONNECTED:", {
         socketId: socket.id,
         userId: user.id,
-        reason,
+        role: user.role,
+        branchId: user.branchId,
       });
+    })
+    .catch((error: unknown) => {
+      console.error("SOCKET ROOM JOIN ERROR:", error);
+
+      // Không cho kết nối tiếp tục nếu không xác định
+      // được phạm vi room hợp lệ.
+      socket.disconnect(true);
+    });
+
+  socket.on("disconnect", (reason) => {
+    console.log("SOCKET DISCONNECTED:", {
+      socketId: socket.id,
+      userId: user.id,
+      reason,
     });
   });
+});
 
   return io;
 };

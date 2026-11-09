@@ -142,11 +142,7 @@ router.put(
 router.delete(
   "/:id",
   authMiddleware,
-  requireRole(
-    "admin",
-    "chain_manager",
-    "branch_manager"
-  ),
+  requireRole("admin"),
   deleteReservation
 );
 

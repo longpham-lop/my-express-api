@@ -1,29 +1,30 @@
+
 import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/db";
 
-// Interface định nghĩa các field
 export interface ReservationAttributes {
   id: number;
   branch_id?: number | null;
   customer_id?: number | null;
   reservation_code?: string | null;
-  user_id?: number;
+  user_id?: number | null;
   table_id: number;
   reservation_time: Date;
   end_time?: Date | null;
   source?: "online" | "phone" | "walk_in";
   status: string;
-  customer_name?: string; 
-  phone?: string; 
-  email?: string;
-  branch?: string; 
-  note?: string; 
+  customer_name: string;
+  phone?: string | null;
+  email?: string | null;
+  branch?: string | null;
+  note?: string | null;
   guest_count: number;
-
 }
 
-// id là optional khi tạo
-type ReservationCreationAttributes = Optional<ReservationAttributes, "id">;
+type ReservationCreationAttributes = Optional<
+  ReservationAttributes,
+  "id" | "source" | "status"
+>;
 
 class Reservation
   extends Model<ReservationAttributes, ReservationCreationAttributes>
@@ -33,38 +34,90 @@ class Reservation
   public branch_id?: number | null;
   public customer_id?: number | null;
   public reservation_code?: string | null;
-  public user_id?: number;
+  public user_id?: number | null;
   public table_id!: number;
   public reservation_time!: Date;
   public end_time?: Date | null;
   public source!: "online" | "phone" | "walk_in";
   public status!: string;
-  public customer_name?: string;
-  public phone?: string;
-  public email?: string;
-  public branch?: string;
-  public note?: string;
+  public customer_name!: string;
+  public phone?: string | null;
+  public email?: string | null;
+  public branch?: string | null;
+  public note?: string | null;
   public guest_count!: number;
 }
 
 Reservation.init(
   {
-    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    branch_id: { type: DataTypes.INTEGER, allowNull: true },
-    customer_id: { type: DataTypes.INTEGER, allowNull: true },
-    reservation_code: { type: DataTypes.STRING(24), allowNull: true, unique: true },
-    user_id: { type: DataTypes.INTEGER, allowNull: true },
-    table_id: { type: DataTypes.INTEGER, allowNull: false },
-    reservation_time: { type: DataTypes.DATE, allowNull: false },
-    end_time: { type: DataTypes.DATE, allowNull: true },
-    source: { type: DataTypes.ENUM("online", "phone", "walk_in"), allowNull: false, defaultValue: "online" },
-    status: { type: DataTypes.STRING, defaultValue: "pending" },
-    customer_name: { type: DataTypes.STRING, allowNull: false }, 
-    phone: { type: DataTypes.STRING, allowNull: true }, 
-    email: {type: DataTypes.STRING, allowNull: true},
-    branch: { type: DataTypes.STRING, allowNull: true }, 
-    note: { type: DataTypes.TEXT, allowNull: true }, 
-    guest_count: { type: DataTypes.INTEGER, allowNull: true},
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    branch_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    customer_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    reservation_code: {
+      type: DataTypes.STRING(24),
+      allowNull: true,
+      unique: true,
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    table_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+    reservation_time: {
+      type: DataTypes.DATE,
+      allowNull: false,
+    },
+    end_time: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    source: {
+      type: DataTypes.ENUM("online", "phone", "walk_in"),
+      allowNull: false,
+      defaultValue: "online",
+    },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "pending",
+    },
+    customer_name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    phone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    email: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    branch: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    note: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    guest_count: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
   },
   {
     sequelize,
@@ -72,7 +125,5 @@ Reservation.init(
     timestamps: true,
   }
 );
-
-// Quan hệ
 
 export default Reservation;

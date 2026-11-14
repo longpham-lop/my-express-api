@@ -3,9 +3,10 @@ import { Op } from "sequelize";
 import sequelize from "../config/db";
 import Payment from "../models/Payment";
 import Order from "../models/Order";
+import StaffBranch from "../models/StaffBranch";
 import { AuthRequest } from "../middlewares/auth.middleware";
 
-const GLOBAL_ROLES = ["admin", "chain_manager"];
+const GLOBAL_ROLES = ["admin"];
 
 const PAYMENT_ROLES = [
   "admin",
@@ -20,18 +21,88 @@ const isGlobalRole = (role?: string) =>
 const canManagePayments = (role?: string) =>
   !!role && PAYMENT_ROLES.includes(role);
 
-const canAccessOrder = (
+/**
+ * Lấy danh sách chi nhánh mà tài khoản được phép truy cập.
+ *
+ * Admin: null (toàn hệ thống).
+ * Chain Manager: các chi nhánh được phân công và đang hoạt động.
+ * Branch Manager / Cashier: chi nhánh trong JWT.
+ */
+const getAccessibleBranchIds = async (
   role: string,
+  userId: number,
+  branchId: number | null | undefined
+): Promise<number[] | null> => {
+  if (role === "admin") {
+    return null;
+  }
+
+  if (role === "chain_manager") {
+    const assignments = await StaffBranch.findAll({
+      attributes: ["branch_id"],
+      where: {
+        user_id: userId,
+        is_active: true,
+      },
+    });
+
+    return [
+      ...new Set(
+        assignments
+          .map((assignment) => Number(assignment.branch_id))
+          .filter(
+            (id) => Number.isSafeInteger(id) && id > 0
+          )
+      ),
+    ];
+  }
+
+  if (
+    role === "branch_manager" ||
+    role === "cashier"
+  ) {
+    if (
+      branchId == null ||
+      !Number.isSafeInteger(Number(branchId)) ||
+      Number(branchId) <= 0
+    ) {
+      return [];
+    }
+
+    return [Number(branchId)];
+  }
+
+  return [];
+};
+
+/**
+ * Kiểm tra quyền truy cập đơn hàng theo chi nhánh.
+ */
+const canAccessOrder = async (
+  role: string,
+  userId: number,
   branchId: number | null | undefined,
   orderBranchId: number | null | undefined
-) => {
-  if (isGlobalRole(role)) return true;
+): Promise<boolean> => {
+  if (
+    orderBranchId == null ||
+    !Number.isSafeInteger(Number(orderBranchId)) ||
+    Number(orderBranchId) <= 0
+  ) {
+    return false;
+  }
 
-  return (
-    branchId != null &&
-    orderBranchId != null &&
-    branchId === orderBranchId
+  const accessibleBranchIds = await getAccessibleBranchIds(
+    role,
+    userId,
+    branchId
   );
+
+  if (accessibleBranchIds === null) {
+    return true;
+  }
+
+  return accessibleBranchIds.includes(Number(orderBranchId));
 };
 
 /* =========================================
@@ -50,7 +121,7 @@ export const getPayments = async (
       });
     }
 
-    const { role, branchId } = req.user;
+    const { id, role, branchId } = req.user;
 
     if (!canManagePayments(role)) {
       return res.status(403).json({
@@ -58,19 +129,25 @@ export const getPayments = async (
       });
     }
 
-    let whereCondition: Record<string, unknown> = {};
+   let whereCondition: Record<string, unknown> = {};
 
-    if (!isGlobalRole(role)) {
-      if (branchId == null) {
-        return res.status(403).json({
-          message: "Tài khoản chưa được gán chi nhánh",
-        });
+    const accessibleBranchIds = await getAccessibleBranchIds(
+      role,
+      id,
+      branchId
+    );
+
+    if (accessibleBranchIds !== null) {
+      if (accessibleBranchIds.length === 0) {
+        return res.json([]);
       }
 
       const branchOrders = await Order.findAll({
         attributes: ["id"],
         where: {
-          branch_id: branchId,
+          branch_id: {
+            [Op.in]: accessibleBranchIds,
+          },
         },
       });
 
@@ -133,7 +210,7 @@ export const createPayment = async (
       });
     }
 
-    const { role, branchId } = req.user;
+    const { id, role, branchId } = req.user;
 
     if (!canManagePayments(role)) {
       return res.status(403).json({
@@ -181,11 +258,12 @@ export const createPayment = async (
       }
 
       if (
-        !canAccessOrder(
+        !(await canAccessOrder(
           role,
+          id,
           branchId,
           order.branch_id
-        )
+        ))
       ) {
         return {
           errorStatus: 403,
@@ -315,11 +393,12 @@ export const getPaymentById = async (
 
     if (
       !order ||
-      !canAccessOrder(
+      !(await canAccessOrder(
         req.user.role,
+        req.user.id,
         req.user.branchId,
         order.branch_id
-      )
+      ))
     ) {
       return res.status(403).json({
         message: "Bạn không có quyền xem giao dịch này",
@@ -371,11 +450,12 @@ export const getPaymentByOrder = async (
 
     if (
       !order ||
-      !canAccessOrder(
+      !(await canAccessOrder(
         req.user.role,
+        req.user.id,
         req.user.branchId,
         order.branch_id
-      )
+      ))
     ) {
       return res.status(404).json({
         message: "Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập",
@@ -459,11 +539,12 @@ export const updatePaymentStatus = async (
 
     if (
       !order ||
-      !canAccessOrder(
+      !(await canAccessOrder(
         req.user.role,
+        req.user.id,
         req.user.branchId,
         order.branch_id
-      )
+      ))
     ) {
       return res.status(403).json({
         message: "Bạn không có quyền cập nhật giao dịch này",

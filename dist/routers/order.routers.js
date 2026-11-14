@@ -8,7 +8,7 @@ const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authMiddleware);
 router.get("/", OrderController_1.getAllOrders);
 router.get("/my", OrderController_1.getMyOrders);
-router.get("/orders/:id", OrderController_1.getOrderDetail);
+router.get("/:id/detail", OrderController_1.getOrderDetail);
 router.put("/items/:id/status", OrderItemController_1.updateOrderItemStatus);
 router.get("/:id", OrderController_1.getOrderById);
 router.post("/", OrderController_1.createOrder);

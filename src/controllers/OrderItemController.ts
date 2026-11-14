@@ -79,85 +79,103 @@ const isGlobalRole = (role: string): boolean =>
 const isManagerRole = (role: string): boolean =>
   MANAGER_ROLES.includes(role);
 
-/* =====================================================
- * PERMISSION HELPERS
- * ===================================================== */
 
 /* =====================================================
  * PERMISSION HELPERS
  * ===================================================== */
 
+/**
+ * Kiểm tra quyền truy cập Order theo chi nhánh.
+ *
+ * Admin: tất cả chi nhánh.
+ * Chain Manager: chi nhánh được phân công và đang hoạt động.
+ * Nhân viên: chi nhánh được gán trong JWT.
+ */
 const canAccessOrderBranch = async (
   role: string,
   userId: number,
   userBranchId: number | null | undefined,
-  orderBranchId: number | null | undefined
+  orderBranchId: number | null | undefined,
+  transaction: Transaction
 ): Promise<boolean> => {
-  if (orderBranchId == null) {
-    return false;
+  // Admin được truy cập toàn hệ thống.
+  if (isGlobalRole(role)) {
+    return true;
   }
 
-  const targetBranchId = Number(orderBranchId);
-
   if (
-    !Number.isInteger(targetBranchId) ||
-    targetBranchId <= 0
+    orderBranchId == null ||
+    !isValidPositiveId(orderBranchId)
   ) {
     return false;
   }
 
-  // Admin được truy cập toàn hệ thống.
-  if (role === "admin") {
-    return true;
-  }
-
-  // Chain Manager chỉ được truy cập chi nhánh được phân công.
+  // Chain Manager phải có phân công đang hoạt động.
   if (role === "chain_manager") {
     const assignment = await StaffBranch.findOne({
       where: {
         user_id: userId,
-        branch_id: targetBranchId,
+        branch_id: Number(orderBranchId),
         is_active: true,
       },
+      transaction,
     });
 
-    return Boolean(assignment);
+    return assignment !== null;
   }
 
-  // Nhân viên thông thường chỉ được truy cập chi nhánh của mình.
-  if (!STAFF_ROLES.includes(role)) {
-    return false;
-  }
-
-  if (userBranchId == null) {
+  // Nhân viên chi nhánh phải thuộc đúng chi nhánh.
+  if (
+    !STAFF_ROLES.includes(role) ||
+    userBranchId == null
+  ) {
     return false;
   }
 
   const currentBranchId = Number(userBranchId);
+  const targetBranchId = Number(orderBranchId);
 
   return (
     Number.isInteger(currentBranchId) &&
     currentBranchId > 0 &&
+    Number.isInteger(targetBranchId) &&
+    targetBranchId > 0 &&
     currentBranchId === targetBranchId
   );
 };
 
+/**
+ * Kiểm tra quyền thêm món và sửa số lượng món.
+ *
+ * Admin: toàn hệ thống.
+ * Chain Manager: chi nhánh được phân công.
+ * Branch Manager, Waiter: chi nhánh được gán.
+ * Customer: chỉ Order của chính mình.
+ *
+ * Kitchen và Cashier không được thêm món hoặc sửa số lượng.
+ */
 const canAccessOrderItem = async (
   role: string,
   userId: number,
   userBranchId: number | null | undefined,
-  order: Order
+  order: Order,
+  transaction: Transaction
 ): Promise<boolean> => {
-  if (role === "admin") {
+  if (isGlobalRole(role)) {
     return true;
   }
 
-  if (role === "chain_manager" || STAFF_ROLES.includes(role)) {
+  if (
+    role === "chain_manager" ||
+    role === "branch_manager" ||
+    role === "waiter"
+  ) {
     return canAccessOrderBranch(
       role,
       userId,
       userBranchId,
-      order.branch_id
+      order.branch_id,
+      transaction
     );
   }
 
@@ -166,6 +184,7 @@ const canAccessOrderItem = async (
     Number(order.user_id) === Number(userId)
   );
 };
+
 
 /* =====================================================
  * ORDER HELPERS
@@ -490,7 +509,8 @@ export const createOrderItem = async (
       role,
       req.user.id,
       req.user.branchId,
-      order
+      order,
+      transaction
     );
 
     if (!canAddItem) {
@@ -693,7 +713,8 @@ export const updateOrderItem = async (
         role,
         req.user.id,
         req.user.branchId,
-        order
+        order,
+        transaction
       ))
     ) {
       await transaction.rollback();
@@ -875,7 +896,8 @@ export const deleteOrderItem = async (
         req.user.role,
         req.user.id,
         req.user.branchId,
-        order.branch_id
+        order.branch_id,
+        transaction
       ))
     ) {
       await transaction.rollback();
@@ -1063,7 +1085,8 @@ export const updateOrderItemStatus = async (
         role,
         req.user.id,
         req.user.branchId,
-        order.branch_id
+        order.branch_id,
+        transaction
       ))
     ) {
       await transaction.rollback();

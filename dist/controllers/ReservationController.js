@@ -46,51 +46,49 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteReservation = exports.cancelReservation = exports.completeReservation = exports.checkInReservation = exports.confirmReservation = exports.updateReservation = exports.getReservationById = exports.getAllReservationsAdmin = exports.getMyReservations = exports.createReservation = exports.createOnlineReservation = exports.requestReservationOtp = exports.checkReservationAvailability = void 0;
+const sequelize_1 = require("sequelize");
+const crypto_1 = require("crypto");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const db_1 = __importDefault(require("../config/db"));
 const Reservation_1 = __importDefault(require("../models/Reservation"));
 const Table_1 = __importDefault(require("../models/Table"));
 const Order_1 = __importDefault(require("../models/Order"));
 const OrderItem_1 = __importDefault(require("../models/OrderItem"));
 const Branch_1 = __importDefault(require("../models/Branch"));
 const OtpRequest_1 = __importDefault(require("../models/OtpRequest"));
-const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const Menu_1 = __importDefault(require("../models/Menu"));
+const StaffBranch_1 = __importDefault(require("../models/StaffBranch"));
 const sendgrid_1 = __importStar(require("../config/sendgrid"));
 const socket_1 = require("../socket");
 /* =========================================================
    CONSTANTS
 ========================================================= */
-const ADMIN_ROLES = [
-    "admin",
-    "chain_manager",
-    "branch_manager",
-];
 const MANAGER_ROLES = [
     "admin",
     "chain_manager",
     "branch_manager",
+];
+const RESERVATION_VIEW_ROLES = [
+    "admin",
+    "chain_manager",
+    "branch_manager",
+    "waiter",
 ];
 const ACTIVE_RESERVATION_STATUSES = [
     "pending",
     "confirmed",
     "checked_in",
 ];
+const RESERVATION_DURATION_MINUTES = 90;
+const OTP_EXPIRATION_MINUTES = 5;
+const OTP_MAX_ATTEMPTS = 5;
 /* =========================================================
-   HELPERS
+   BASIC HELPERS
 ========================================================= */
-const isManager = (role) => {
-    return !!role && MANAGER_ROLES.includes(role);
-};
-const canManageBranch = (user, branchId) => {
-    if (branchId == null) {
-        return false;
-    }
-    if (user.role === "admin" ||
-        user.role === "chain_manager") {
-        return true;
-    }
-    if (user.role === "branch_manager") {
-        return user.branchId === branchId;
-    }
-    return false;
+const getErrorMessage = (error) => {
+    return error instanceof Error
+        ? error.message
+        : "Unknown error";
 };
 const parseId = (value) => {
     const rawValue = Array.isArray(value)
@@ -100,31 +98,256 @@ const parseId = (value) => {
         return null;
     }
     const id = Number(rawValue);
-    return Number.isInteger(id) && id > 0
+    return Number.isSafeInteger(id) && id > 0
         ? id
         : null;
 };
+const isValidPositiveId = (value) => {
+    return Number.isSafeInteger(value) && value > 0;
+};
 const parseReservationTime = (value) => {
-    if (value instanceof Date) {
-        return Number.isNaN(value.getTime())
-            ? null
-            : value;
-    }
-    if (typeof value !== "string") {
+    if (typeof value !== "string" &&
+        !(value instanceof Date)) {
         return null;
     }
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime())
-        ? null
-        : parsed;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+    return date;
 };
-const getErrorMessage = (error) => {
-    return error instanceof Error
-        ? error.message
-        : "Unknown error";
+const isValidPhone = (phone) => {
+    return /^(0|\+84)[0-9]{9,10}$/.test(phone);
+};
+const getReservationEndTime = (startTime) => {
+    return new Date(startTime.getTime() +
+        RESERVATION_DURATION_MINUTES * 60 * 1000);
+};
+const isPastReservationTime = (startTime) => {
+    return startTime.getTime() <= Date.now();
+};
+const isManager = (role) => {
+    return MANAGER_ROLES.includes(role);
 };
 /* =========================================================
-   SOCKET HELPER
+   BRANCH PERMISSION
+========================================================= */
+const canManageBranch = (user, branchId) => __awaiter(void 0, void 0, void 0, function* () {
+    if (branchId == null) {
+        return false;
+    }
+    const targetBranchId = Number(branchId);
+    if (!isValidPositiveId(targetBranchId)) {
+        return false;
+    }
+    if (user.role === "admin") {
+        return true;
+    }
+    if (user.role === "chain_manager") {
+        const assignment = yield StaffBranch_1.default.findOne({
+            where: {
+                user_id: user.id,
+                branch_id: targetBranchId,
+                is_active: true,
+            },
+        });
+        return Boolean(assignment);
+    }
+    if (user.role === "branch_manager") {
+        return Number(user.branchId) === targetBranchId;
+    }
+    return false;
+});
+/* =========================================================
+   TABLE CONFLICT CHECK
+========================================================= */
+const hasReservationConflict = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const { branchId, tableId, startTime, excludeReservationId, transaction, } = params;
+    const newEndTime = getReservationEndTime(startTime);
+    const whereCondition = {
+        branch_id: branchId,
+        table_id: tableId,
+        status: {
+            [sequelize_1.Op.in]: ACTIVE_RESERVATION_STATUSES,
+        },
+        reservation_time: {
+            [sequelize_1.Op.lt]: newEndTime,
+        },
+    };
+    if (excludeReservationId !== undefined) {
+        whereCondition.id = {
+            [sequelize_1.Op.ne]: excludeReservationId,
+        };
+    }
+    const reservations = yield Reservation_1.default.findAll({
+        where: whereCondition,
+        attributes: [
+            "id",
+            "reservation_time",
+            "end_time",
+        ],
+        transaction,
+    });
+    return reservations.some((reservation) => {
+        const existingStart = new Date(reservation.reservation_time);
+        const existingEnd = reservation.end_time
+            ? new Date(reservation.end_time)
+            : getReservationEndTime(existingStart);
+        return (existingStart.getTime() < newEndTime.getTime() &&
+            existingEnd.getTime() > startTime.getTime());
+    });
+});
+/* =========================================================
+   VALIDATE BRANCH
+========================================================= */
+const validateBranch = (branchId) => __awaiter(void 0, void 0, void 0, function* () {
+    const branch = yield Branch_1.default.findByPk(branchId);
+    if (!branch) {
+        throw new Error("Không tìm thấy chi nhánh");
+    }
+    if (branch.status !== "active") {
+        throw new Error("Chi nhánh hiện không hoạt động");
+    }
+    if (!branch.is_accepting_reservations) {
+        throw new Error("Chi nhánh hiện không nhận đặt bàn");
+    }
+    return branch;
+});
+/* =========================================================
+   VALIDATE AND PRICE CART
+   Không tin giá frontend gửi lên.
+========================================================= */
+const validateAndPriceCart = (cart, branchId, transaction) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    if (cart === undefined) {
+        return {
+            items: [],
+            total: 0,
+        };
+    }
+    if (!Array.isArray(cart)) {
+        throw new Error("Giỏ hàng không hợp lệ");
+    }
+    if (cart.length === 0) {
+        return {
+            items: [],
+            total: 0,
+        };
+    }
+    if (cart.length > 100) {
+        throw new Error("Giỏ hàng có quá nhiều món");
+    }
+    const quantityByMenuId = new Map();
+    for (const item of cart) {
+        const menuItemId = Number(item.id);
+        const quantity = Number(item.quantity);
+        if (!Number.isSafeInteger(menuItemId) ||
+            menuItemId <= 0 ||
+            !Number.isSafeInteger(quantity) ||
+            quantity <= 0 ||
+            quantity > 99) {
+            throw new Error("Thông tin món ăn hoặc số lượng không hợp lệ");
+        }
+        const currentQuantity = (_a = quantityByMenuId.get(menuItemId)) !== null && _a !== void 0 ? _a : 0;
+        const nextQuantity = currentQuantity + quantity;
+        if (nextQuantity > 99) {
+            throw new Error("Tổng số lượng một món không được vượt quá 99");
+        }
+        quantityByMenuId.set(menuItemId, nextQuantity);
+    }
+    const menuIds = Array.from(quantityByMenuId.keys());
+    const menuItems = yield Menu_1.default.findAll({
+        where: {
+            id: {
+                [sequelize_1.Op.in]: menuIds,
+            },
+            isActive: true,
+            is_deleted: false,
+            [sequelize_1.Op.or]: [
+                {
+                    branch_id: branchId,
+                },
+                {
+                    branch_id: null,
+                },
+            ],
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+    });
+    if (menuItems.length !== menuIds.length) {
+        throw new Error("Một hoặc nhiều món không tồn tại, đã ngừng bán hoặc không thuộc chi nhánh này");
+    }
+    const menuMap = new Map(menuItems.map((item) => [
+        Number(item.id),
+        item,
+    ]));
+    const items = [];
+    let total = 0;
+    for (const [menuItemId, quantity] of quantityByMenuId) {
+        const menuItem = menuMap.get(menuItemId);
+        if (!menuItem) {
+            throw new Error("Không tìm thấy món ăn");
+        }
+        const price = Number(menuItem.price);
+        if (!Number.isFinite(price) || price < 0) {
+            throw new Error("Giá món ăn không hợp lệ");
+        }
+        const subtotal = price * quantity;
+        if (!Number.isFinite(subtotal) ||
+            !Number.isSafeInteger(Math.round(subtotal))) {
+            throw new Error("Giá trị món ăn không hợp lệ");
+        }
+        total += subtotal;
+        items.push({
+            menu_item_id: menuItemId,
+            name: menuItem.name,
+            price,
+            quantity,
+            subtotal,
+        });
+    }
+    if (!Number.isFinite(total) ||
+        total < 0 ||
+        !Number.isSafeInteger(Math.round(total))) {
+        throw new Error("Tổng tiền đơn hàng không hợp lệ");
+    }
+    return {
+        items,
+        total,
+    };
+});
+/* =========================================================
+   CREATE ORDER FROM VALIDATED CART
+========================================================= */
+const createOrderFromCart = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const { reservationId, branchId, userId, cart, transaction, } = params;
+    if (cart.items.length === 0) {
+        return null;
+    }
+    const order = yield Order_1.default.create({
+        branch_id: branchId,
+        reservation_id: reservationId,
+        user_id: userId,
+        total_price: cart.total,
+        status: "pending",
+        is_deleted: false,
+    }, {
+        transaction,
+    });
+    yield OrderItem_1.default.bulkCreate(cart.items.map((item) => ({
+        order_id: order.id,
+        menu_item_id: item.menu_item_id,
+        quantity: item.quantity,
+        unit_price: item.price,
+        status: "pending",
+    })), {
+        transaction,
+    });
+    return order;
+});
+/* =========================================================
+   SOCKET
 ========================================================= */
 const emitReservationEvent = (eventName, branchId, payload) => {
     try {
@@ -141,6 +364,42 @@ const emitReservationEvent = (eventName, branchId, payload) => {
     }
 };
 /* =========================================================
+   EMAIL
+========================================================= */
+const sendReservationEmail = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const { email, name, branchName, branchAddress, reservationTime, guestCount, phone, } = params;
+    if (!email || !(0, sendgrid_1.isEmailDeliveryConfigured)()) {
+        return "skipped";
+    }
+    try {
+        yield sendgrid_1.default.send({
+            to: email,
+            from: process.env.SENDGRID_FROM_EMAIL || "",
+            subject: "Xác nhận đặt bàn",
+            text: `
+Xin chào ${name},
+
+Bạn đã đặt bàn thành công!
+
+Chi nhánh: ${branchName}
+Địa chỉ: ${branchAddress}
+Thời gian: ${reservationTime.toLocaleString("vi-VN", {
+                timeZone: "Asia/Ho_Chi_Minh",
+            })}
+Số khách: ${guestCount}
+Số điện thoại: ${phone}
+
+Vui lòng đến đúng giờ và báo tên hoặc số điện thoại cho nhân viên.
+      `,
+        });
+        return "sent";
+    }
+    catch (error) {
+        console.error("RESERVATION EMAIL FAILED:", error);
+        return "failed";
+    }
+});
+/* =========================================================
    CHECK RESERVATION AVAILABILITY
 ========================================================= */
 const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -148,51 +407,31 @@ const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, voi
         const { branch_id, start_time, guest_count, } = req.body;
         const branchId = Number(branch_id);
         const guestCount = Number(guest_count);
-        if (!Number.isInteger(branchId)) {
+        if (!isValidPositiveId(branchId)) {
             return res.status(400).json({
                 message: "Chi nhánh không hợp lệ",
             });
         }
-        if (!start_time) {
-            return res.status(400).json({
-                message: "Vui lòng chọn thời gian đặt bàn",
-            });
-        }
         if (!Number.isInteger(guestCount) ||
-            guestCount <= 0) {
+            guestCount <= 0 ||
+            guestCount > 100) {
             return res.status(400).json({
                 message: "Số khách không hợp lệ",
             });
         }
-        /* =====================================================
-           1. KIỂM TRA CHI NHÁNH
-        ===================================================== */
-        const branch = yield Branch_1.default.findByPk(branchId);
-        if (!branch) {
-            return res.status(404).json({
-                message: "Không tìm thấy chi nhánh",
-            });
-        }
-        if (branch.status !== "active") {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không hoạt động",
-            });
-        }
-        if (!branch.is_accepting_reservations) {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không nhận đặt bàn",
-            });
-        }
-        /* =====================================================
-           2. KIỂM TRA GIỜ HOẠT ĐỘNG
-        ===================================================== */
-        const date = new Date(start_time);
-        if (Number.isNaN(date.getTime())) {
+        const reservationTime = parseReservationTime(start_time);
+        if (!reservationTime) {
             return res.status(400).json({
                 message: "Thời gian đặt bàn không hợp lệ",
             });
         }
-        const timeString = date
+        if (isPastReservationTime(reservationTime)) {
+            return res.status(400).json({
+                message: "Không thể đặt bàn vào thời gian đã qua",
+            });
+        }
+        const branch = yield validateBranch(branchId);
+        const timeString = reservationTime
             .toTimeString()
             .slice(0, 8);
         if (timeString < branch.opening_time ||
@@ -201,9 +440,6 @@ const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, voi
                 message: `Chi nhánh chỉ nhận đặt bàn từ ${branch.opening_time} đến ${branch.closing_time}`,
             });
         }
-        /* =====================================================
-           3. LẤY TẤT CẢ BÀN CỦA CHI NHÁNH
-        ===================================================== */
         const tables = yield Table_1.default.findAll({
             where: {
                 branch_id: branchId,
@@ -213,35 +449,21 @@ const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, voi
                 ["id", "ASC"],
             ],
         });
-        /* =====================================================
-           4. LỌC BÀN ĐỦ SỨC CHỨA
-        ===================================================== */
-        const suitableTables = tables.filter((table) => table.capacity >= guestCount);
-        if (suitableTables.length === 0) {
-            return res.status(200).json({
-                message: "Không có bàn phù hợp với số lượng khách",
-                data: [],
+        const availableTables = [];
+        for (const table of tables) {
+            if (table.status === "occupied" ||
+                table.capacity < guestCount) {
+                continue;
+            }
+            const hasConflict = yield hasReservationConflict({
+                branchId,
+                tableId: table.id,
+                startTime: reservationTime,
             });
+            if (!hasConflict) {
+                availableTables.push(table);
+            }
         }
-        /* =====================================================
-           5. LẤY RESERVATION ĐANG ACTIVE
-        ===================================================== */
-        const reservations = yield Reservation_1.default.findAll({
-            where: {
-                branch_id: branchId,
-                reservation_time: start_time,
-                status: ACTIVE_RESERVATION_STATUSES,
-            },
-        });
-        const reservedTableIds = new Set(reservations.map((reservation) => reservation.table_id));
-        /* =====================================================
-           6. LỌC BÀN ĐANG TRỐNG
-        ===================================================== */
-        const availableTables = suitableTables.filter((table) => !reservedTableIds.has(table.id) &&
-            table.status !== "occupied");
-        /* =====================================================
-           7. RESPONSE
-        ===================================================== */
         return res.status(200).json({
             message: availableTables.length > 0
                 ? "Tìm thấy bàn phù hợp"
@@ -264,59 +486,30 @@ const checkReservationAvailability = (req, res) => __awaiter(void 0, void 0, voi
 });
 exports.checkReservationAvailability = checkReservationAvailability;
 /* =========================================================
-   REQUEST RESERVATION OTP
+   REQUEST OTP
 ========================================================= */
 const requestReservationOtp = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { phone } = req.body;
-        const normalizedPhone = String(phone || "").trim();
-        if (!normalizedPhone) {
-            return res.status(400).json({
-                message: "Vui lòng nhập số điện thoại",
-            });
-        }
-        /*
-         * Kiểm tra số điện thoại cơ bản
-         */
-        const phoneRegex = /^(0|\+84)[0-9]{9,10}$/;
-        if (!phoneRegex.test(normalizedPhone)) {
+        const normalizedPhone = String(phone !== null && phone !== void 0 ? phone : "").trim();
+        if (!normalizedPhone || !isValidPhone(normalizedPhone)) {
             return res.status(400).json({
                 message: "Số điện thoại không hợp lệ",
             });
         }
-        /*
-         * Tạo mã OTP 6 số
-         */
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        /*
-         * Hash OTP trước khi lưu DB
-         */
+        const code = (0, crypto_1.randomInt)(100000, 1000000).toString();
         const codeHash = yield bcryptjs_1.default.hash(code, 10);
-        /*
-         * OTP có hiệu lực 5 phút
-         */
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        /*
-         * Tạo request OTP
-         */
+        const expiresAt = new Date(Date.now() + OTP_EXPIRATION_MINUTES * 60 * 1000);
         const otpRequest = yield OtpRequest_1.default.create({
             phone: normalizedPhone,
             purpose: "reservation",
             code_hash: codeHash,
             expires_at: expiresAt,
             attempts: 0,
-            max_attempts: 5,
+            max_attempts: OTP_MAX_ATTEMPTS,
         });
-        /*
-         * =====================================================
-         * DEVELOPMENT MODE
-         *
-         * Trả code để test local.
-         * Khi deploy production thì KHÔNG trả debug_code.
-         * =====================================================
-         */
         return res.status(200).json({
-            message: "Đã gửi mã OTP",
+            message: "Đã tạo yêu cầu OTP",
             data: {
                 otp_request_id: otpRequest.id,
                 debug_code: process.env.NODE_ENV !== "production"
@@ -329,7 +522,7 @@ const requestReservationOtp = (req, res) => __awaiter(void 0, void 0, void 0, fu
     catch (error) {
         console.error("REQUEST RESERVATION OTP ERROR:", error);
         return res.status(500).json({
-            message: "Không thể gửi mã OTP",
+            message: "Không thể tạo mã OTP",
             error: getErrorMessage(error),
         });
     }
@@ -339,302 +532,183 @@ exports.requestReservationOtp = requestReservationOtp;
    CREATE ONLINE RESERVATION WITH OTP
 ========================================================= */
 const createOnlineReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+    var _a, _b, _c, _d;
+    let transaction = null;
     try {
         const { branch_id, table_id, start_time, guest_count, name, phone, email, note, otp_request_id, otp_code, cart, } = req.body;
         const branchId = Number(branch_id);
         const tableId = Number(table_id);
         const guestCount = Number(guest_count);
         const otpRequestId = Number(otp_request_id);
-        /*
-         * =====================================================
-         * 1. VALIDATE INPUT
-         * =====================================================
-         */
-        if (!Number.isInteger(branchId) ||
-            branchId <= 0) {
+        const normalizedName = String(name !== null && name !== void 0 ? name : "").trim();
+        const normalizedPhone = String(phone !== null && phone !== void 0 ? phone : "").trim();
+        const normalizedEmail = String(email !== null && email !== void 0 ? email : "").trim();
+        const reservationTime = parseReservationTime(start_time);
+        if (!isValidPositiveId(branchId)) {
             return res.status(400).json({
                 message: "Chi nhánh không hợp lệ",
             });
         }
-        if (!Number.isInteger(tableId) ||
-            tableId <= 0) {
+        if (!isValidPositiveId(tableId)) {
             return res.status(400).json({
                 message: "Bàn không hợp lệ",
             });
         }
-        if (!start_time) {
-            return res.status(400).json({
-                message: "Vui lòng chọn thời gian đặt bàn",
-            });
-        }
-        if (!Number.isInteger(guestCount) ||
-            guestCount <= 0) {
-            return res.status(400).json({
-                message: "Số khách không hợp lệ",
-            });
-        }
-        if (!(name === null || name === void 0 ? void 0 : name.trim())) {
-            return res.status(400).json({
-                message: "Vui lòng nhập họ tên",
-            });
-        }
-        if (!(phone === null || phone === void 0 ? void 0 : phone.trim())) {
-            return res.status(400).json({
-                message: "Vui lòng nhập số điện thoại",
-            });
-        }
-        if (!Number.isInteger(otpRequestId) ||
-            otpRequestId <= 0) {
-            return res.status(400).json({
-                message: "Yêu cầu OTP không hợp lệ",
-            });
-        }
-        if (!(otp_code === null || otp_code === void 0 ? void 0 : otp_code.trim())) {
-            return res.status(400).json({
-                message: "Vui lòng nhập mã OTP",
-            });
-        }
-        /*
-         * =====================================================
-         * 2. TÌM OTP REQUEST
-         * =====================================================
-         */
-        const otpRequest = yield OtpRequest_1.default.findOne({
-            where: {
-                id: otpRequestId,
-                phone: phone.trim(),
-                purpose: "reservation",
-            },
-        });
-        if (!otpRequest) {
-            return res.status(400).json({
-                message: "Mã OTP không tồn tại hoặc không hợp lệ",
-            });
-        }
-        /*
-         * =====================================================
-         * 3. KIỂM TRA OTP ĐÃ XÁC THỰC
-         * =====================================================
-         */
-        if (otpRequest.verified_at) {
-            return res.status(400).json({
-                message: "Mã OTP này đã được sử dụng",
-            });
-        }
-        /*
-         * =====================================================
-         * 4. KIỂM TRA HẾT HẠN
-         * =====================================================
-         */
-        if (new Date() >
-            new Date(otpRequest.expires_at)) {
-            return res.status(400).json({
-                message: "Mã OTP đã hết hạn, vui lòng lấy mã mới",
-            });
-        }
-        /*
-         * =====================================================
-         * 5. KIỂM TRA SỐ LẦN NHẬP
-         * =====================================================
-         */
-        if (otpRequest.attempts >=
-            otpRequest.max_attempts) {
-            return res.status(400).json({
-                message: "Bạn đã nhập sai OTP quá số lần cho phép",
-            });
-        }
-        /*
-         * =====================================================
-         * 6. SO SÁNH OTP
-         * =====================================================
-         */
-        const isValidOtp = yield bcryptjs_1.default.compare(otp_code.trim(), otpRequest.code_hash);
-        if (!isValidOtp) {
-            yield otpRequest.increment("attempts");
-            return res.status(400).json({
-                message: "Mã OTP không chính xác",
-            });
-        }
-        /*
-         * =====================================================
-         * 7. TÌM CHI NHÁNH
-         * =====================================================
-         */
-        const branch = yield Branch_1.default.findByPk(branchId);
-        if (!branch) {
-            return res.status(404).json({
-                message: "Không tìm thấy chi nhánh",
-            });
-        }
-        if (branch.status !== "active") {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không hoạt động",
-            });
-        }
-        if (!branch.is_accepting_reservations) {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không nhận đặt bàn",
-            });
-        }
-        /*
-         * =====================================================
-         * 8. KIỂM TRA BÀN
-         * =====================================================
-         */
-        const table = yield Table_1.default.findByPk(tableId);
-        if (!table) {
-            return res.status(404).json({
-                message: "Không tìm thấy bàn",
-            });
-        }
-        if (table.branch_id !== branchId) {
-            return res.status(400).json({
-                message: "Bàn không thuộc chi nhánh đã chọn",
-            });
-        }
-        if (guestCount > table.capacity) {
-            return res.status(400).json({
-                message: `Bàn chỉ phục vụ tối đa ${table.capacity} người`,
-            });
-        }
-        /*
-         * =====================================================
-         * 9. KIỂM TRA THỜI GIAN
-         * =====================================================
-         */
-        const reservationTime = parseReservationTime(start_time);
         if (!reservationTime) {
             return res.status(400).json({
                 message: "Thời gian đặt bàn không hợp lệ",
             });
         }
-        /*
-         * =====================================================
-         * 10. KIỂM TRA TRÙNG BÀN
-         * =====================================================
-         */
-        const existing = yield Reservation_1.default.findOne({
-            where: {
-                table_id: tableId,
-                reservation_time: reservationTime,
-                status: ACTIVE_RESERVATION_STATUSES,
-            },
-        });
-        if (existing) {
-            return res.status(409).json({
-                message: "Bàn vừa được khách khác đặt",
+        if (isPastReservationTime(reservationTime)) {
+            return res.status(400).json({
+                message: "Không thể đặt bàn vào thời gian đã qua",
             });
         }
-        /*
-         * =====================================================
-         * 11. ĐÁNH DẤU OTP ĐÃ XÁC THỰC
-         * =====================================================
-         */
-        yield otpRequest.update({
-            verified_at: new Date(),
+        if (!Number.isInteger(guestCount) ||
+            guestCount <= 0 ||
+            guestCount > 100) {
+            return res.status(400).json({
+                message: "Số khách không hợp lệ",
+            });
+        }
+        if (!normalizedName) {
+            return res.status(400).json({
+                message: "Vui lòng nhập họ tên",
+            });
+        }
+        if (!isValidPhone(normalizedPhone)) {
+            return res.status(400).json({
+                message: "Số điện thoại không hợp lệ",
+            });
+        }
+        if (!isValidPositiveId(otpRequestId) ||
+            !/^[0-9]{6}$/.test(String(otp_code !== null && otp_code !== void 0 ? otp_code : "").trim())) {
+            return res.status(400).json({
+                message: "Thông tin OTP không hợp lệ",
+            });
+        }
+        transaction = yield db_1.default.transaction();
+        const branch = yield Branch_1.default.findByPk(branchId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
         });
-        /*
-         * =====================================================
-         * 12. TẠO RESERVATION
-         * =====================================================
-         */
+        if (!branch) {
+            throw new Error("Không tìm thấy chi nhánh");
+        }
+        if (branch.status !== "active" ||
+            !branch.is_accepting_reservations) {
+            throw new Error("Chi nhánh hiện không nhận đặt bàn");
+        }
+        const table = yield Table_1.default.findByPk(tableId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!table || Number(table.branch_id) !== branchId) {
+            throw new Error("Bàn không thuộc chi nhánh đã chọn");
+        }
+        if (table.status === "occupied") {
+            throw new Error("Bàn hiện đang có khách sử dụng");
+        }
+        if (guestCount > table.capacity) {
+            throw new Error(`Bàn chỉ phục vụ tối đa ${table.capacity} người`);
+        }
+        const timeString = reservationTime
+            .toTimeString()
+            .slice(0, 8);
+        if (timeString < branch.opening_time ||
+            timeString >= branch.closing_time) {
+            throw new Error("Thời gian đặt bàn nằm ngoài giờ hoạt động");
+        }
+        const otpRequest = yield OtpRequest_1.default.findOne({
+            where: {
+                id: otpRequestId,
+                phone: normalizedPhone,
+                purpose: "reservation",
+            },
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!otpRequest) {
+            throw new Error("Mã OTP không tồn tại hoặc không hợp lệ");
+        }
+        if (otpRequest.verified_at) {
+            throw new Error("Mã OTP này đã được sử dụng");
+        }
+        if (new Date(otpRequest.expires_at).getTime() <= Date.now()) {
+            throw new Error("Mã OTP đã hết hạn");
+        }
+        if (otpRequest.attempts >= otpRequest.max_attempts) {
+            throw new Error("Bạn đã nhập sai OTP quá số lần cho phép");
+        }
+        const isValidOtp = yield bcryptjs_1.default.compare(String(otp_code).trim(), otpRequest.code_hash);
+        if (!isValidOtp) {
+            yield otpRequest.increment("attempts", {
+                transaction,
+            });
+            yield transaction.commit();
+            transaction = null;
+            return res.status(400).json({
+                message: "Mã OTP không chính xác",
+            });
+        }
+        const hasConflict = yield hasReservationConflict({
+            branchId,
+            tableId,
+            startTime: reservationTime,
+            transaction,
+        });
+        if (hasConflict) {
+            throw new Error("Bàn vừa được khách khác đặt");
+        }
+        const validatedCart = yield validateAndPriceCart(cart, branchId, transaction);
         const reservation = yield Reservation_1.default.create({
             branch_id: branchId,
             table_id: tableId,
             reservation_time: reservationTime,
-            customer_name: name.trim(),
-            phone: phone.trim(),
-            email: (email === null || email === void 0 ? void 0 : email.trim()) || "",
+            end_time: getReservationEndTime(reservationTime),
+            customer_name: normalizedName,
+            phone: normalizedPhone,
+            email: normalizedEmail || null,
             branch: branch.name,
             note: (note === null || note === void 0 ? void 0 : note.trim()) || "",
             guest_count: guestCount,
+            user_id: (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id) !== null && _b !== void 0 ? _b : null,
+            status: "pending",
+        }, {
+            transaction,
+        });
+        const order = yield createOrderFromCart({
+            reservationId: reservation.id,
+            branchId,
+            userId: (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c.id) !== null && _d !== void 0 ? _d : null,
+            cart: validatedCart,
+            transaction,
+        });
+        yield otpRequest.update({
+            verified_at: new Date(),
+        }, {
+            transaction,
+        });
+        yield transaction.commit();
+        transaction = null;
+        emitReservationEvent("new-reservation", branchId, {
+            id: reservation.id,
+            branch_id: branchId,
+            table_id: tableId,
+            name: normalizedName,
+            phone: normalizedPhone,
+            time: reservationTime,
             status: "pending",
         });
-        /* =====================================================
-       13. TẠO ORDER NẾU CÓ CART
-    ===================================================== */
-        let order = null;
-        if (Array.isArray(cart) && cart.length > 0) {
-            const validCart = cart.filter((item) => {
-                const price = Number(item.price);
-                const quantity = Number(item.quantity);
-                const menuItemId = Number(item.id);
-                return (Number.isFinite(price) &&
-                    price >= 0 &&
-                    Number.isFinite(quantity) &&
-                    quantity > 0 &&
-                    Number.isInteger(menuItemId) &&
-                    menuItemId > 0);
-            });
-            if (validCart.length > 0) {
-                const total = validCart.reduce((sum, item) => sum +
-                    Number(item.price) * Number(item.quantity), 0);
-                order = yield Order_1.default.create({
-                    branch_id: reservation.branch_id,
-                    reservation_id: reservation.id,
-                    user_id: (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id) !== null && _b !== void 0 ? _b : null,
-                    total_price: total,
-                    status: "pending",
-                    is_deleted: false,
-                });
-                yield OrderItem_1.default.bulkCreate(validCart.map((item) => ({
-                    order_id: order.id,
-                    menu_item_id: Number(item.id),
-                    quantity: Number(item.quantity),
-                    unit_price: Number(item.price),
-                })));
-            }
-        }
-        /*
-         * =====================================================
-         * 13. REALTIME
-         * =====================================================
-         */
-        emitReservationEvent("new-reservation", reservation.branch_id, {
-            id: reservation.id,
-            branch_id: reservation.branch_id,
-            table_id: reservation.table_id,
-            name: reservation.customer_name,
-            phone: reservation.phone,
-            time: reservation.reservation_time,
-            status: reservation.status,
+        const notificationStatus = yield sendReservationEmail({
+            email: normalizedEmail,
+            name: normalizedName,
+            branchName: branch.name,
+            branchAddress: branch.address,
+            reservationTime,
+            guestCount,
+            phone: normalizedPhone,
         });
-        /*
-         * =====================================================
-         * 14. EMAIL XÁC NHẬN
-         * =====================================================
-         */
-        let notificationStatus = "skipped";
-        if (email &&
-            (0, sendgrid_1.isEmailDeliveryConfigured)()) {
-            try {
-                yield sendgrid_1.default.send({
-                    to: email,
-                    from: process.env.SENDGRID_FROM_EMAIL ||
-                        "",
-                    subject: "Xác nhận đặt bàn",
-                    text: `
-Xin chào ${name},
-
-Bạn đã đặt bàn thành công!
-
-Chi nhánh: ${branch.name}
-Địa chỉ: ${branch.address}
-Thời gian: ${start_time}
-Số khách: ${guestCount}
-Số điện thoại: ${phone}
-
-Vui lòng đến đúng giờ và báo tên hoặc số điện thoại cho nhân viên.
-          `,
-                });
-                notificationStatus = "sent";
-            }
-            catch (emailError) {
-                notificationStatus = "failed";
-                console.error("ONLINE RESERVATION EMAIL FAILED:", emailError);
-            }
-        }
         return res.status(201).json({
             message: "Xác nhận đặt bàn thành công",
             data: {
@@ -645,198 +719,184 @@ Vui lòng đến đúng giờ và báo tên hoặc số điện thoại cho nhâ
         });
     }
     catch (error) {
+        if (transaction) {
+            yield transaction.rollback();
+        }
         console.error("CREATE ONLINE RESERVATION ERROR:", error);
-        return res.status(500).json({
+        const message = getErrorMessage(error);
+        const isBusinessError = [
+            "Không tìm thấy",
+            "không thuộc",
+            "không nhận",
+            "không hợp lệ",
+            "không chính xác",
+            "đã sử dụng",
+            "đã hết hạn",
+            "quá số lần",
+            "đang có khách",
+            "vừa được khách",
+            "chỉ phục vụ",
+            "ngoài giờ",
+            "không thể đặt",
+            "không tồn tại",
+            "ngừng bán",
+            "Giá",
+            "Giỏ hàng",
+            "Số lượng",
+            "Tổng số lượng",
+            "Tổng tiền",
+        ].some((text) => message.includes(text));
+        return res.status(isBusinessError ? 400 : 500).json({
             message: "Không thể tạo đặt bàn",
-            error: getErrorMessage(error),
+            error: message,
         });
     }
 });
 exports.createOnlineReservation = createOnlineReservation;
 /* =========================================================
    CREATE RESERVATION
+   Dùng cho luồng nhân viên tạo đặt bàn.
 ========================================================= */
 const createReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b;
+    let transaction = null;
     try {
         const { table_id, reservation_time, name, phone, email, note, cart, guest_count, } = req.body;
-        const parsedReservationTime = parseReservationTime(reservation_time);
-        if (!table_id ||
-            !parsedReservationTime ||
-            !name ||
-            !phone) {
-            return res.status(400).json({
-                message: "Thiếu thông tin bắt buộc để đặt bàn",
-            });
-        }
         const tableId = Number(table_id);
         const guestCount = Number(guest_count);
-        if (!Number.isInteger(tableId)) {
+        const normalizedName = String(name !== null && name !== void 0 ? name : "").trim();
+        const normalizedPhone = String(phone !== null && phone !== void 0 ? phone : "").trim();
+        const normalizedEmail = String(email !== null && email !== void 0 ? email : "").trim();
+        const reservationTime = parseReservationTime(reservation_time);
+        if (!isValidPositiveId(tableId)) {
             return res.status(400).json({
                 message: "ID bàn không hợp lệ",
             });
         }
+        if (!reservationTime) {
+            return res.status(400).json({
+                message: "Thời gian đặt bàn không hợp lệ",
+            });
+        }
+        if (isPastReservationTime(reservationTime)) {
+            return res.status(400).json({
+                message: "Không thể đặt bàn vào thời gian đã qua",
+            });
+        }
         if (!Number.isInteger(guestCount) ||
-            guestCount <= 0) {
+            guestCount <= 0 ||
+            guestCount > 100) {
             return res.status(400).json({
-                message: "Số lượng khách phải lớn hơn 0",
+                message: "Số lượng khách không hợp lệ",
             });
         }
-        /* =====================================================
-           1. KIỂM TRA BÀN
-        ===================================================== */
-        const table = yield Table_1.default.findByPk(tableId);
-        if (!table) {
-            return res.status(404).json({
-                message: "Bàn không tồn tại",
+        if (!normalizedName) {
+            return res.status(400).json({
+                message: "Vui lòng nhập họ tên",
             });
         }
-        if (!table.branch_id) {
+        if (!isValidPhone(normalizedPhone)) {
             return res.status(400).json({
-                message: "Bàn chưa được gán chi nhánh",
+                message: "Số điện thoại không hợp lệ",
             });
+        }
+        transaction = yield db_1.default.transaction();
+        const table = yield Table_1.default.findByPk(tableId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!table || !table.branch_id) {
+            throw new Error("Bàn không tồn tại hoặc chưa được gán chi nhánh");
+        }
+        const branchId = Number(table.branch_id);
+        const branch = yield Branch_1.default.findByPk(branchId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!branch) {
+            throw new Error("Không tìm thấy chi nhánh");
+        }
+        if (branch.status !== "active" ||
+            !branch.is_accepting_reservations) {
+            throw new Error("Chi nhánh hiện không nhận đặt bàn");
+        }
+        if (table.status === "occupied") {
+            throw new Error("Bàn hiện đang có khách sử dụng");
         }
         if (guestCount > table.capacity) {
-            return res.status(400).json({
-                message: `Bàn chỉ phục vụ tối đa ${table.capacity} người`,
-            });
+            throw new Error(`Bàn chỉ phục vụ tối đa ${table.capacity} người`);
         }
-        /* =====================================================
-           2. KIỂM TRA CHI NHÁNH
-        ===================================================== */
-        const branch = yield Branch_1.default.findByPk(table.branch_id);
-        if (!branch) {
-            return res.status(404).json({
-                message: "Chi nhánh của bàn không tồn tại",
-            });
+        if (req.user &&
+            isManager(req.user.role) &&
+            !(yield canManageBranch(req.user, branchId))) {
+            throw new Error("Bạn không có quyền thao tác tại chi nhánh này");
         }
-        if (branch.status !== "active") {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không hoạt động",
-            });
+        if (req.user &&
+            ["waiter", "cashier"].includes(req.user.role) &&
+            Number(req.user.branchId) !== branchId) {
+            throw new Error("Bạn không có quyền thao tác tại chi nhánh này");
         }
-        if (!branch.is_accepting_reservations) {
-            return res.status(400).json({
-                message: "Chi nhánh hiện không nhận đặt bàn",
-            });
+        const timeString = reservationTime
+            .toTimeString()
+            .slice(0, 8);
+        if (timeString < branch.opening_time ||
+            timeString >= branch.closing_time) {
+            throw new Error("Thời gian đặt bàn nằm ngoài giờ hoạt động");
         }
-        /* =====================================================
-           3. KIỂM TRA TRÙNG LỊCH
-        ===================================================== */
-        const existing = yield Reservation_1.default.findOne({
-            where: {
-                table_id: tableId,
-                reservation_time: parsedReservationTime,
-                status: ACTIVE_RESERVATION_STATUSES,
-            },
+        const hasConflict = yield hasReservationConflict({
+            branchId,
+            tableId,
+            startTime: reservationTime,
+            transaction,
         });
-        if (existing) {
-            return res.status(409).json({
-                message: "Bàn đã được đặt trong thời gian này",
-            });
+        if (hasConflict) {
+            throw new Error("Bàn đã được đặt trong thời gian này");
         }
-        /* =====================================================
-           4. TẠO RESERVATION
-        ===================================================== */
-        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+        const validatedCart = yield validateAndPriceCart(cart, branchId, transaction);
+        const userId = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id) !== null && _b !== void 0 ? _b : null;
         const reservation = yield Reservation_1.default.create({
-            branch_id: table.branch_id,
+            branch_id: branchId,
             table_id: tableId,
-            reservation_time: parsedReservationTime,
-            customer_name: name.trim(),
-            phone: phone.trim(),
-            email: (email === null || email === void 0 ? void 0 : email.trim()) || "",
+            reservation_time: reservationTime,
+            end_time: getReservationEndTime(reservationTime),
+            customer_name: normalizedName,
+            phone: normalizedPhone,
+            email: normalizedEmail || null,
             branch: branch.name,
             note: (note === null || note === void 0 ? void 0 : note.trim()) || "",
             guest_count: guestCount,
             user_id: userId,
             status: "pending",
+        }, {
+            transaction,
         });
-        /* =====================================================
-           5. TẠO ORDER NẾU CÓ CART
-        ===================================================== */
-        let order = null;
-        if (Array.isArray(cart) &&
-            cart.length > 0) {
-            const total = cart.reduce((sum, item) => {
-                const price = Number(item.price);
-                const quantity = Number(item.quantity);
-                if (!Number.isFinite(price) ||
-                    !Number.isFinite(quantity)) {
-                    return sum;
-                }
-                return sum + price * quantity;
-            }, 0);
-            order = yield Order_1.default.create({
-                branch_id: reservation.branch_id,
-                reservation_id: reservation.id,
-                user_id: userId !== null && userId !== void 0 ? userId : undefined,
-                total_price: total,
-                status: "pending",
-                is_deleted: false,
-            });
-            const orderItems = cart.map((item) => ({
-                order_id: order.id,
-                menu_item_id: Number(item.id),
-                quantity: Number(item.quantity),
-                unit_price: Number(item.price),
-            }));
-            yield OrderItem_1.default.bulkCreate(orderItems);
-        }
-        /* =====================================================
-           6. REALTIME
-        ===================================================== */
-        try {
-            const io = (0, socket_1.getIO)();
-            emitReservationEvent("new-reservation", reservation.branch_id, {
-                id: reservation.id,
-                branch_id: reservation.branch_id,
-                table_id: reservation.table_id,
-                name: reservation.customer_name,
-                phone: reservation.phone,
-                time: reservation.reservation_time,
-                status: reservation.status,
-            });
-        }
-        /* =====================================================
-           7. EMAIL
-        ===================================================== */
-        finally {
-        }
-        /* =====================================================
-           7. EMAIL
-        ===================================================== */
-        let notificationStatus = "skipped";
-        if (email) {
-            const msg = {
-                to: email,
-                from: process.env.SENDGRID_FROM_EMAIL || "",
-                subject: "Xác nhận đặt bàn",
-                text: `
-Xin chào ${name},
-
-Bạn đã đặt bàn thành công!
-
-Cơ sở: ${branch.name}
-Địa chỉ: ${branch.address}
-Thời gian: ${reservation_time}
-Số khách: ${guestCount}
-Số điện thoại: ${phone}
-
-Khi đến nhà hàng, vui lòng báo tên hoặc số điện thoại cho nhân viên.
-        `,
-            };
-            if ((0, sendgrid_1.isEmailDeliveryConfigured)()) {
-                try {
-                    yield sendgrid_1.default.send(msg);
-                    notificationStatus = "sent";
-                }
-                catch (emailError) {
-                    notificationStatus = "failed";
-                    console.error("RESERVATION EMAIL FAILED:", emailError);
-                }
-            }
-        }
+        const order = yield createOrderFromCart({
+            reservationId: reservation.id,
+            branchId,
+            userId,
+            cart: validatedCart,
+            transaction,
+        });
+        yield transaction.commit();
+        transaction = null;
+        emitReservationEvent("new-reservation", branchId, {
+            id: reservation.id,
+            branch_id: branchId,
+            table_id: tableId,
+            name: normalizedName,
+            phone: normalizedPhone,
+            time: reservationTime,
+            status: "pending",
+        });
+        const notificationStatus = yield sendReservationEmail({
+            email: normalizedEmail,
+            name: normalizedName,
+            branchName: branch.name,
+            branchAddress: branch.address,
+            reservationTime,
+            guestCount,
+            phone: normalizedPhone,
+        });
         return res.status(201).json({
             message: "Đặt bàn thành công",
             data: {
@@ -847,8 +907,11 @@ Khi đến nhà hàng, vui lòng báo tên hoặc số điện thoại cho nhân
         });
     }
     catch (error) {
+        if (transaction) {
+            yield transaction.rollback();
+        }
         console.error("CREATE RESERVATION ERROR:", error);
-        return res.status(500).json({
+        return res.status(400).json({
             message: "Không thể tạo đặt bàn",
             error: getErrorMessage(error),
         });
@@ -894,77 +957,61 @@ const getMyReservations = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 ["reservation_time", "DESC"],
             ],
         });
-        return res.json(data);
+        return res.status(200).json(data);
     }
     catch (error) {
         console.error("GET MY RESERVATIONS ERROR:", error);
         return res.status(500).json({
             message: "Không thể lấy lịch đặt bàn",
+            error: getErrorMessage(error),
         });
     }
 });
 exports.getMyReservations = getMyReservations;
 /* =========================================================
-   ADMIN GET ALL
+   GET ALL RESERVATIONS
 ========================================================= */
 const getAllReservationsAdmin = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // =====================================================
-        // 1. BẮT BUỘC ĐĂNG NHẬP
-        // =====================================================
         if (!req.user) {
             return res.status(401).json({
                 message: "Chưa đăng nhập",
             });
         }
-        const { role, branchId, } = req.user;
-        // =====================================================
-        // 2. CHỈ CÁC ROLE ĐƯỢC PHÉP XEM RESERVATION ADMIN
-        // =====================================================
-        const allowedRoles = [
-            "admin",
-            "chain_manager",
-            "branch_manager",
-            "waiter",
-        ];
-        if (!allowedRoles.includes(role)) {
+        const { role, branchId } = req.user;
+        if (!RESERVATION_VIEW_ROLES.includes(role)) {
             return res.status(403).json({
                 message: "Bạn không có quyền xem danh sách đặt bàn",
             });
         }
-        // =====================================================
-        // 3. BRANCH MANAGER PHẢI CÓ CHI NHÁNH
-        // =====================================================
-        if ((role === "branch_manager" || role === "waiter") &&
-            !branchId) {
-            return res.status(403).json({
-                message: "Tài khoản quản lý chi nhánh chưa được gán chi nhánh",
-            });
-        }
-        // =====================================================
-        // 4. TẠO ĐIỀU KIỆN QUERY
-        // =====================================================
         const where = {};
-        // -----------------------------------------------------
-        // ADMIN / CHAIN MANAGER
-        // → xem toàn hệ thống
-        // -----------------------------------------------------
-        if (role === "admin" ||
-            role === "chain_manager") {
-            // Không thêm branch_id
-            // => xem tất cả chi nhánh
+        if (role === "chain_manager") {
+            const assignments = yield StaffBranch_1.default.findAll({
+                where: {
+                    user_id: req.user.id,
+                    is_active: true,
+                },
+                attributes: ["branch_id"],
+            });
+            const branchIds = [
+                ...new Set(assignments.map((item) => Number(item.branch_id))),
+            ];
+            if (branchIds.length === 0) {
+                return res.status(200).json([]);
+            }
+            where.branch_id = {
+                [sequelize_1.Op.in]: branchIds,
+            };
         }
-        // -----------------------------------------------------
-        // BRANCH MANAGER
-        // → CHỈ branch của mình
-        // -----------------------------------------------------
-        if (role === "branch_manager" || role === "waiter") {
-            where.branch_id =
-                branchId;
+        else if (role === "branch_manager" ||
+            role === "waiter") {
+            if (!branchId) {
+                return res.status(403).json({
+                    message: "Tài khoản chưa được gán chi nhánh",
+                });
+            }
+            where.branch_id = branchId;
         }
-        // =====================================================
-        // 5. LẤY RESERVATION
-        // =====================================================
         const data = yield Reservation_1.default.findAll({
             where,
             include: [
@@ -974,6 +1021,7 @@ const getAllReservationsAdmin = (req, res) => __awaiter(void 0, void 0, void 0, 
                         "id",
                         "name",
                         "capacity",
+                        "type",
                     ],
                 },
                 {
@@ -988,25 +1036,16 @@ const getAllReservationsAdmin = (req, res) => __awaiter(void 0, void 0, void 0, 
                 },
             ],
             order: [
-                [
-                    "reservation_time",
-                    "DESC",
-                ],
+                ["reservation_time", "DESC"],
             ],
         });
-        // =====================================================
-        // 6. TRẢ DATA
-        // =====================================================
         return res.status(200).json(data);
     }
-    catch (err) {
-        console.error("GET ADMIN RESERVATION ERROR:", err);
-        const message = err instanceof Error
-            ? err.message
-            : "Unknown error";
+    catch (error) {
+        console.error("GET ADMIN RESERVATION ERROR:", error);
         return res.status(500).json({
             message: "Không thể tải danh sách đặt bàn",
-            error: message,
+            error: getErrorMessage(error),
         });
     }
 });
@@ -1055,23 +1094,31 @@ const getReservationById = (req, res) => __awaiter(void 0, void 0, void 0, funct
                 message: "Không tìm thấy đặt bàn",
             });
         }
-        const canAccess = isManager(req.user.role)
-            ? canManageBranch(req.user, reservation.branch_id)
-            : req.user.role === "waiter"
-                ? req.user.branchId === reservation.branch_id
-                : reservation.user_id === req.user.id;
-        req.user.id;
+        let canAccess = false;
+        if (isManager(req.user.role)) {
+            canAccess = yield canManageBranch(req.user, reservation.branch_id);
+        }
+        else if (req.user.role === "waiter") {
+            canAccess =
+                Number(req.user.branchId) ===
+                    Number(reservation.branch_id);
+        }
+        else {
+            canAccess =
+                reservation.user_id === req.user.id;
+        }
         if (!canAccess) {
             return res.status(403).json({
                 message: "Bạn không có quyền xem đặt bàn này",
             });
         }
-        return res.json(reservation);
+        return res.status(200).json(reservation);
     }
     catch (error) {
         console.error("GET RESERVATION BY ID ERROR:", error);
         return res.status(500).json({
             message: "Không thể lấy thông tin đặt bàn",
+            error: getErrorMessage(error),
         });
     }
 });
@@ -1080,6 +1127,7 @@ exports.getReservationById = getReservationById;
    UPDATE RESERVATION
 ========================================================= */
 const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    let transaction = null;
     try {
         if (!req.user) {
             return res.status(401).json({
@@ -1092,139 +1140,128 @@ const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 message: "ID không hợp lệ",
             });
         }
-        const reservation = yield Reservation_1.default.findByPk(id);
+        transaction = yield db_1.default.transaction();
+        const reservation = yield Reservation_1.default.findByPk(id, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
         if (!reservation) {
+            yield transaction.rollback();
+            transaction = null;
             return res.status(404).json({
                 message: "Không tìm thấy đặt bàn",
             });
         }
-        if (!canManageBranch(req.user, reservation.branch_id)) {
+        if (!(yield canManageBranch(req.user, reservation.branch_id))) {
+            yield transaction.rollback();
+            transaction = null;
             return res.status(403).json({
                 message: "Bạn không có quyền cập nhật đặt bàn này",
             });
         }
         const { table_id, reservation_time, guest_count, note, status, } = req.body;
-        // Không cho phép thay đổi trạng thái qua API cập nhật thông tin.
-        // Trạng thái phải đi qua các API chuyên biệt.
         if (status !== undefined) {
+            yield transaction.rollback();
+            transaction = null;
             return res.status(400).json({
                 message: "Vui lòng sử dụng chức năng riêng để thay đổi trạng thái đặt bàn",
             });
         }
-        /* =====================================================
-           VALIDATE STATUS
-        ===================================================== */
-        const validStatuses = [
-            "pending",
-            "confirmed",
-            "checked_in",
-            "completed",
-            "cancelled",
-        ];
-        if (status !== undefined &&
-            !validStatuses.includes(status)) {
-            return res.status(400).json({
-                message: "Trạng thái đặt bàn không hợp lệ",
-            });
-        }
-        const nextReservationTime = reservation_time !== undefined
+        const nextTime = reservation_time !== undefined
             ? parseReservationTime(reservation_time)
-            : null;
-        if (reservation_time !== undefined &&
-            !nextReservationTime) {
-            return res.status(400).json({
-                message: "Thời gian đặt bàn không hợp lệ",
-            });
+            : new Date(reservation.reservation_time);
+        if (!nextTime) {
+            throw new Error("Thời gian đặt bàn không hợp lệ");
         }
-        /* =====================================================
-           TABLE
-        ===================================================== */
-        let targetTableId = reservation.table_id;
-        if (table_id !== undefined) {
-            const newTableId = Number(table_id);
-            if (!Number.isInteger(newTableId)) {
-                return res.status(400).json({
-                    message: "ID bàn không hợp lệ",
-                });
-            }
-            const newTable = yield Table_1.default.findByPk(newTableId);
-            if (!newTable) {
-                return res.status(404).json({
-                    message: "Không tìm thấy bàn mới",
-                });
-            }
-            if (newTable.branch_id !==
-                reservation.branch_id) {
-                return res.status(400).json({
-                    message: "Bàn không thuộc chi nhánh của đặt bàn",
-                });
-            }
-            targetTableId = newTableId;
+        if (isPastReservationTime(nextTime)) {
+            throw new Error("Không thể đặt bàn vào thời gian đã qua");
         }
-        /* =====================================================
-           GUEST COUNT
-        ===================================================== */
-        let targetGuestCount = reservation.guest_count;
-        if (guest_count !== undefined) {
-            const value = Number(guest_count);
-            if (!Number.isInteger(value) ||
-                value <= 0) {
-                return res.status(400).json({
-                    message: "Số khách không hợp lệ",
-                });
-            }
-            targetGuestCount = value;
+        const targetTableId = table_id !== undefined
+            ? Number(table_id)
+            : reservation.table_id;
+        if (!isValidPositiveId(targetTableId)) {
+            throw new Error("ID bàn không hợp lệ");
         }
-        const targetTable = yield Table_1.default.findByPk(targetTableId);
+        const targetGuestCount = guest_count !== undefined
+            ? Number(guest_count)
+            : reservation.guest_count;
+        if (!Number.isInteger(targetGuestCount) ||
+            targetGuestCount <= 0 ||
+            targetGuestCount > 100) {
+            throw new Error("Số khách không hợp lệ");
+        }
+        const targetTable = yield Table_1.default.findByPk(targetTableId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
         if (!targetTable) {
-            return res.status(404).json({
-                message: "Không tìm thấy bàn",
-            });
+            throw new Error("Không tìm thấy bàn");
         }
-        if (targetGuestCount >
-            targetTable.capacity) {
-            return res.status(400).json({
-                message: `Bàn chỉ phục vụ tối đa ${targetTable.capacity} người`,
-            });
+        if (Number(targetTable.branch_id) !==
+            Number(reservation.branch_id)) {
+            throw new Error("Bàn không thuộc chi nhánh của đặt bàn");
         }
-        /* =====================================================
-           CHECK TRÙNG LỊCH NẾU ĐỔI BÀN/GIỜ
-        ===================================================== */
-        if (table_id !== undefined ||
-            reservation_time !== undefined) {
-            const existing = yield Reservation_1.default.findOne({
-                where: {
-                    table_id: targetTableId,
-                    reservation_time: nextReservationTime !== null && nextReservationTime !== void 0 ? nextReservationTime : reservation.reservation_time,
-                    status: ACTIVE_RESERVATION_STATUSES,
-                },
-            });
-            if (existing &&
-                existing.id !== reservation.id) {
-                return res.status(409).json({
-                    message: "Bàn đã có đặt bàn trong thời gian này",
-                });
-            }
+        if (targetGuestCount > targetTable.capacity) {
+            throw new Error(`Bàn chỉ phục vụ tối đa ${targetTable.capacity} người`);
         }
-        /* =====================================================
-           UPDATE
-        ===================================================== */
+        const branch = yield Branch_1.default.findByPk(Number(reservation.branch_id), {
+            transaction,
+        });
+        if (!branch) {
+            throw new Error("Không tìm thấy chi nhánh");
+        }
+        const timeString = nextTime
+            .toTimeString()
+            .slice(0, 8);
+        if (timeString < branch.opening_time ||
+            timeString >= branch.closing_time) {
+            throw new Error("Thời gian đặt bàn nằm ngoài giờ hoạt động");
+        }
+        if (targetTable.status === "occupied") {
+            throw new Error("Bàn hiện đang có khách sử dụng");
+        }
+        const hasConflict = yield hasReservationConflict({
+            branchId: Number(reservation.branch_id),
+            tableId: targetTableId,
+            startTime: nextTime,
+            excludeReservationId: reservation.id,
+            transaction,
+        });
+        if (hasConflict) {
+            throw new Error("Bàn đã có đặt bàn trong thời gian này");
+        }
         yield reservation.update({
             table_id: targetTableId,
-            reservation_time: nextReservationTime !== null && nextReservationTime !== void 0 ? nextReservationTime : reservation.reservation_time,
+            reservation_time: nextTime,
+            end_time: getReservationEndTime(nextTime),
             guest_count: targetGuestCount,
             note: note !== undefined
                 ? String(note).trim()
                 : reservation.note,
+        }, {
+            transaction,
         });
-        return res.json({
+        yield transaction.commit();
+        transaction = null;
+        emitReservationEvent("reservation-updated", reservation.branch_id, {
+            id: reservation.id,
+            branch_id: reservation.branch_id,
+            table_id: targetTableId,
+            reservation_time: nextTime,
+            end_time: getReservationEndTime(nextTime),
+            guest_count: targetGuestCount,
+        });
+        return res.status(200).json({
             message: "Cập nhật đặt bàn thành công",
             data: reservation,
         });
     }
     catch (error) {
+        if (transaction) {
+            yield transaction.rollback();
+        }
         console.error("UPDATE RESERVATION ERROR:", error);
-        return res.status(500).json({
+        return res.status(400).json({
             message: "Không thể cập nhật đặt bàn",
             error: getErrorMessage(error),
         });
@@ -1232,7 +1269,144 @@ const updateReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
 });
 exports.updateReservation = updateReservation;
 /* =========================================================
-   CONFIRM RESERVATION
+   RESERVATION STATUS TRANSITIONS
+========================================================= */
+const ALLOWED_TRANSITIONS = {
+    pending: [
+        "confirmed",
+        "cancelled",
+    ],
+    confirmed: [
+        "checked_in",
+        "cancelled",
+    ],
+    checked_in: [
+        "completed",
+    ],
+    completed: [],
+    cancelled: [],
+};
+/* =========================================================
+   CHANGE RESERVATION STATUS
+========================================================= */
+const changeReservationStatus = (req, res, nextStatus) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    let transaction = null;
+    try {
+        if (!req.user) {
+            return res.status(401).json({
+                message: "Chưa đăng nhập",
+            });
+        }
+        if (![
+            "admin",
+            "chain_manager",
+            "branch_manager",
+        ].includes(req.user.role)) {
+            return res.status(403).json({
+                message: "Bạn không có quyền thay đổi trạng thái đặt bàn",
+            });
+        }
+        const id = parseId(req.params.id);
+        if (!id) {
+            return res.status(400).json({
+                message: "ID không hợp lệ",
+            });
+        }
+        transaction = yield db_1.default.transaction();
+        const reservation = yield Reservation_1.default.findByPk(id, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!reservation) {
+            yield transaction.rollback();
+            transaction = null;
+            return res.status(404).json({
+                message: "Không tìm thấy đặt bàn",
+            });
+        }
+        if (!(yield canManageBranch(req.user, reservation.branch_id))) {
+            yield transaction.rollback();
+            transaction = null;
+            return res.status(403).json({
+                message: "Bạn không có quyền thao tác đặt bàn này",
+            });
+        }
+        const currentStatus = reservation.status;
+        if (!((_a = ALLOWED_TRANSITIONS[currentStatus]) === null || _a === void 0 ? void 0 : _a.includes(nextStatus))) {
+            throw new Error(`Không thể chuyển từ "${currentStatus}" sang "${nextStatus}"`);
+        }
+        const table = yield Table_1.default.findByPk(reservation.table_id, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!table) {
+            throw new Error("Không tìm thấy bàn của đặt bàn");
+        }
+        yield reservation.update({
+            status: nextStatus,
+        }, {
+            transaction,
+        });
+        if (nextStatus === "checked_in") {
+            yield table.update({
+                status: "occupied",
+            }, {
+                transaction,
+            });
+        }
+        if (nextStatus === "completed" ||
+            nextStatus === "cancelled") {
+            const anotherActiveReservation = yield Reservation_1.default.findOne({
+                where: {
+                    id: {
+                        [sequelize_1.Op.ne]: reservation.id,
+                    },
+                    branch_id: reservation.branch_id,
+                    table_id: reservation.table_id,
+                    status: {
+                        [sequelize_1.Op.in]: [
+                            "checked_in",
+                        ],
+                    },
+                },
+                transaction,
+                lock: transaction.LOCK.UPDATE,
+            });
+            if (!anotherActiveReservation) {
+                yield table.update({
+                    status: "available",
+                }, {
+                    transaction,
+                });
+            }
+        }
+        yield transaction.commit();
+        transaction = null;
+        emitReservationEvent("reservation-status-updated", reservation.branch_id, {
+            id: reservation.id,
+            branch_id: reservation.branch_id,
+            table_id: reservation.table_id,
+            status: nextStatus,
+        });
+        return res.status(200).json({
+            message: "Cập nhật trạng thái thành công",
+            data: reservation,
+        });
+    }
+    catch (error) {
+        if (transaction) {
+            yield transaction.rollback();
+        }
+        console.error("CHANGE RESERVATION STATUS ERROR:", error);
+        return res.status(400).json({
+            message: "Không thể cập nhật trạng thái đặt bàn",
+            error: getErrorMessage(error),
+        });
+    }
+});
+/* =========================================================
+   CONFIRM
 ========================================================= */
 const confirmReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     return changeReservationStatus(req, res, "confirmed");
@@ -1260,111 +1434,20 @@ const cancelReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
 });
 exports.cancelReservation = cancelReservation;
 /* =========================================================
-   CHANGE STATUS HELPER
-========================================================= */
-const changeReservationStatus = (req, res, nextStatus) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        if (!req.user) {
-            return res.status(401).json({
-                message: "Chưa đăng nhập",
-            });
-        }
-        const id = parseId(req.params.id);
-        if (!id) {
-            return res.status(400).json({
-                message: "ID không hợp lệ",
-            });
-        }
-        const reservation = yield Reservation_1.default.findByPk(id);
-        if (!reservation) {
-            return res.status(404).json({
-                message: "Không tìm thấy đặt bàn",
-            });
-        }
-        if (!canManageBranch(req.user, reservation.branch_id)) {
-            return res.status(403).json({
-                message: "Bạn không có quyền thao tác đặt bàn này",
-            });
-        }
-        const currentStatus = reservation.status;
-        /* =====================================================
-           KIỂM TRA CHUYỂN TRẠNG THÁI
-        ===================================================== */
-        const allowedTransitions = {
-            pending: [
-                "confirmed",
-                "cancelled",
-            ],
-            confirmed: [
-                "checked_in",
-                "cancelled",
-            ],
-            checked_in: [
-                "completed",
-            ],
-            completed: [],
-            cancelled: [],
-        };
-        if (!allowedTransitions[currentStatus].includes(nextStatus)) {
-            return res.status(400).json({
-                message: `Không thể chuyển từ "${currentStatus}" sang "${nextStatus}"`,
-            });
-        }
-        yield reservation.update({
-            status: nextStatus,
-        });
-        /* =====================================================
-           ĐỒNG BỘ BÀN
-        ===================================================== */
-        const table = yield Table_1.default.findByPk(reservation.table_id);
-        if (table) {
-            if (nextStatus === "checked_in") {
-                yield table.update({
-                    status: "occupied",
-                });
-            }
-            if (nextStatus === "completed" ||
-                nextStatus === "cancelled") {
-                yield table.update({
-                    status: "available",
-                });
-            }
-        }
-        /* =====================================================
-           REALTIME
-        ===================================================== */
-        emitReservationEvent("reservation-status-updated", reservation.branch_id, {
-            id: reservation.id,
-            branch_id: reservation.branch_id,
-            table_id: reservation.table_id,
-            status: nextStatus,
-        });
-        return res.json({
-            message: "Cập nhật trạng thái thành công",
-            data: reservation,
-        });
-    }
-    catch (error) {
-        console.error("CHANGE RESERVATION STATUS ERROR:", error);
-        return res.status(500).json({
-            message: "Không thể cập nhật trạng thái đặt bàn",
-            error: getErrorMessage(error),
-        });
-    }
-});
-/* =========================================================
-   DELETE
+   DELETE RESERVATION
+   Chỉ Admin được xóa.
 ========================================================= */
 const deleteReservation = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    let transaction = null;
     try {
         if (!req.user) {
             return res.status(401).json({
                 message: "Chưa đăng nhập",
             });
         }
-        if (!ADMIN_ROLES.includes(req.user.role)) {
+        if (req.user.role !== "admin") {
             return res.status(403).json({
-                message: "Bạn không có quyền xóa đặt bàn",
+                message: "Chỉ Admin mới được xóa đặt bàn",
             });
         }
         const id = parseId(req.params.id);
@@ -1373,23 +1456,35 @@ const deleteReservation = (req, res) => __awaiter(void 0, void 0, void 0, functi
                 message: "ID không hợp lệ",
             });
         }
-        const reservation = yield Reservation_1.default.findByPk(id);
+        transaction = yield db_1.default.transaction();
+        const reservation = yield Reservation_1.default.findByPk(id, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
         if (!reservation) {
+            yield transaction.rollback();
+            transaction = null;
             return res.status(404).json({
                 message: "Không tìm thấy đặt bàn",
             });
         }
-        if (!canManageBranch(req.user, reservation.branch_id)) {
-            return res.status(403).json({
-                message: "Bạn không có quyền xóa đặt bàn của chi nhánh khác",
-            });
-        }
-        yield reservation.destroy();
-        return res.json({
+        yield reservation.destroy({
+            transaction,
+        });
+        yield transaction.commit();
+        transaction = null;
+        emitReservationEvent("reservation-deleted", reservation.branch_id, {
+            id: reservation.id,
+            branch_id: reservation.branch_id,
+        });
+        return res.status(200).json({
             message: "Xóa đặt bàn thành công",
         });
     }
     catch (error) {
+        if (transaction) {
+            yield transaction.rollback();
+        }
         console.error("DELETE RESERVATION ERROR:", error);
         return res.status(500).json({
             message: "Không thể xóa đặt bàn",

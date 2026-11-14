@@ -7,6 +7,7 @@ import {
   listAreas,
   listPublicBranches,
   listBranches,
+  getStaffBranches,
   updateArea,
   deleteArea,
   updateBranch,
@@ -122,6 +123,12 @@ CHỈ ADMIN + CHAIN MANAGER
 router.use(
   authMiddleware,
   requireChainManager
+);
+
+// LẤY DANH SÁCH CHI NHÁNH ĐƯỢC PHÂN CÔNG CHO NHÂN VIÊN
+router.get(
+  "/staff/:userId/assignments",
+  getStaffBranches
 );
 
 router.post(

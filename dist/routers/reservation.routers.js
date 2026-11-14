@@ -37,5 +37,5 @@ router.put("/:id/complete", auth_middleware_1.authMiddleware, (0, role_middlewar
 // Hủy
 router.put("/:id/cancel", auth_middleware_1.authMiddleware, (0, role_middleware_1.requireRole)("admin", "chain_manager", "branch_manager"), ReservationController_1.cancelReservation);
 // Xóa
-router.delete("/:id", auth_middleware_1.authMiddleware, (0, role_middleware_1.requireRole)("admin", "chain_manager", "branch_manager"), ReservationController_1.deleteReservation);
+router.delete("/:id", auth_middleware_1.authMiddleware, (0, role_middleware_1.requireRole)("admin"), ReservationController_1.deleteReservation);
 exports.default = router;

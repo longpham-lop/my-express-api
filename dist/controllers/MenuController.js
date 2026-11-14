@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteMenuItem = exports.updateMenuItem = exports.getMenuItemById = exports.getAllMenuItems = exports.createMenuItem = void 0;
 const Menu_1 = __importDefault(require("../models/Menu"));
 const Category_1 = __importDefault(require("../models/Category"));
+const sequelize_1 = require("sequelize");
 /* ================= CREATE ================= */
 const createMenuItem = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -47,10 +48,34 @@ const createMenuItem = (req, res) => __awaiter(void 0, void 0, void 0, function*
 });
 exports.createMenuItem = createMenuItem;
 /* ================= GET ALL ================= */
+/* ================= GET ALL ================= */
 const getAllMenuItems = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        const branchIdParam = req.query.branch_id;
+        const activeOnly = req.query.active_only === "true";
+        let branchId;
+        // Kiểm tra branch_id nếu có truyền lên
+        if (branchIdParam !== undefined) {
+            branchId = Number(branchIdParam);
+            if (!Number.isInteger(branchId) || branchId <= 0) {
+                return res.status(400).json({
+                    message: "branch_id không hợp lệ",
+                });
+            }
+        }
+        // Xây dựng điều kiện truy vấn
+        const whereCondition = Object.assign(Object.assign({ is_deleted: false }, (activeOnly
+            ? { isActive: true }
+            : {})), (branchId !== undefined
+            ? {
+                [sequelize_1.Op.or]: [
+                    { branch_id: branchId },
+                    { branch_id: null },
+                ],
+            }
+            : {}));
         const items = yield Menu_1.default.findAll({
-            where: { is_deleted: false },
+            where: whereCondition,
             include: [
                 {
                     model: Category_1.default,
@@ -66,7 +91,13 @@ const getAllMenuItems = (req, res) => __awaiter(void 0, void 0, void 0, function
         });
     }
     catch (err) {
-        return res.status(500).json({ message: err.message });
+        const message = err instanceof Error
+            ? err.message
+            : "Không thể lấy danh sách món ăn";
+        console.error("GET ALL MENU ITEMS ERROR:", err);
+        return res.status(500).json({
+            message,
+        });
     }
 });
 exports.getAllMenuItems = getAllMenuItems;

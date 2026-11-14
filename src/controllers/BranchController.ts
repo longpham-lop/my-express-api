@@ -11,6 +11,7 @@ import {
 
 import type { AuthRequest } from "../middlewares/auth.middleware";
 import { Op } from "sequelize";
+import { getIO } from "../socket";
 
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
@@ -1111,11 +1112,40 @@ export const deleteArea = async (
  *
  * Router phải bảo vệ bằng requireChainManager.
  */
+const parseOptionalBoolean = (
+  value: unknown
+): boolean | undefined | null => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+
+  return null;
+};
+
+
 export const assignStaff = async (
-  req: Request,
+  req: AuthRequest,
   res: Response
 ) => {
   try {
+    const currentUser = req.user;
+
+    if (!currentUser) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
     const branchId = Number(
       req.params.id
     );
@@ -1151,9 +1181,58 @@ export const assignStaff = async (
       });
     }
 
-    const isPrimary =
-      Boolean(req.body.is_primary);
+    if (currentUser.role === "chain_manager") {
+      const managedBranch = await StaffBranch.findOne({
+        where: {
+          user_id: currentUser.id,
+          branch_id: branchId,
+          is_active: true,
+        },
+      });
 
+      if (!managedBranch) {
+        return res.status(403).json({
+          message: "Bạn không có quyền quản lý chi nhánh này",
+        });
+      }
+    }
+    const isPrimaryValue = parseOptionalBoolean(
+      req.body?.is_primary
+    );
+
+    const isActiveValue = parseOptionalBoolean(
+      req.body?.is_active
+    );
+
+    if (
+      isPrimaryValue === null ||
+      isActiveValue === null
+    ) {
+      return res.status(400).json({
+        message: "is_primary và is_active phải là boolean true/false",
+      });
+    }
+
+    const isPrimary = isPrimaryValue ?? false;
+    const isActive = isActiveValue ?? true;
+
+    if (isPrimary && !isActive) {
+      return res.status(400).json({
+        message: "Chi nhánh không hoạt động không thể là chi nhánh chính",
+      });
+    }
+
+    if (isPrimary) {
+      await StaffBranch.update(
+        { is_primary: false },
+        {
+          where: {
+            user_id: userId,
+            is_primary: true,
+          },
+        }
+      );
+    }
     const [
       assignment,
       created,
@@ -1167,7 +1246,7 @@ export const assignStaff = async (
         branch_id: branchId,
         user_id: userId,
         is_primary: isPrimary,
-        is_active: true,
+        is_active: isActive,
       },
     });
 
@@ -1178,15 +1257,30 @@ export const assignStaff = async (
     if (!created) {
       await assignment.update({
         is_primary: isPrimary,
-
-        is_active:
-          req.body.is_active !==
-          undefined
-            ? Boolean(
-                req.body.is_active
-              )
-            : true,
+        is_active: isActive,
       });
+    }
+    
+    if (isPrimary) {
+      await user.update({
+        branch_id: branchId,
+      });
+    }
+
+    try {
+      getIO()
+        .to(`user:${userId}`)
+        .emit("branch-assignments-updated", {
+          userId,
+          branchId,
+          is_primary: isPrimary,
+          is_active: isActive,
+        });
+    } catch (socketError: unknown) {
+      console.warn(
+        "BRANCH ASSIGNMENT SOCKET WARNING:",
+        socketError
+      );
     }
 
     return res.status(
@@ -1203,6 +1297,95 @@ export const assignStaff = async (
     return res.status(500).json({
       message:
         "Không thể phân công nhân viên",
+    });
+  }
+};
+
+export const getStaffBranches = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: "Chưa đăng nhập",
+      });
+    }
+
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        message: "ID nhân viên không hợp lệ",
+      });
+    }
+
+    const targetUser = await User.findByPk(userId);
+
+    if (!targetUser) {
+      return res.status(404).json({
+        message: "Không tìm thấy nhân viên",
+      });
+    }
+
+    // Admin được xem toàn bộ phân công của nhân viên.
+    // Chain Manager chỉ được xem phân công thuộc các chi nhánh mình quản lý.
+    let branchIds: number[] | null = null;
+
+    if (req.user.role === "chain_manager") {
+      const managedAssignments = await StaffBranch.findAll({
+        where: {
+          user_id: req.user.id,
+          is_active: true,
+        },
+        attributes: ["branch_id"],
+      });
+
+      branchIds = [
+        ...new Set(
+          managedAssignments.map((item) => Number(item.branch_id))
+        ),
+      ];
+
+      if (branchIds.length === 0) {
+        return res.status(200).json({
+          data: [],
+        });
+      }
+    }
+
+    const assignments = await StaffBranch.findAll({
+      where: {
+        user_id: userId,
+        ...(branchIds !== null
+          ? {
+              branch_id: {
+                [Op.in]: branchIds,
+              },
+            }
+          : {}),
+      },
+      attributes: [
+        "id",
+        "user_id",
+        "branch_id",
+        "is_primary",
+        "is_active",
+      ],
+      order: [
+        ["is_primary", "DESC"],
+        ["branch_id", "ASC"],
+      ],
+    });
+
+    return res.status(200).json({
+      data: assignments,
+    });
+  } catch (error) {
+    console.error("GET STAFF BRANCHES ERROR:", error);
+
+    return res.status(500).json({
+      message: "Không thể lấy danh sách chi nhánh được phân công",
     });
   }
 };
